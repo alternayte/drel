@@ -22,6 +22,56 @@ minor versions may contain breaking changes.
   `db.Tx(ctx)`, which returns the tracked repositories bound to the transaction
   in the context.
 
+- **Outbox relay with leases** (`drel.NewRelay`). More than one replica can poll
+  one outbox table without publishing a message two times. A claim takes a lease
+  on a batch and increments the attempt counter. Postgres claims with
+  `FOR UPDATE SKIP LOCKED`. SQLite and LibSQL claim with a conditional `UPDATE`,
+  which is safe because SQLite serialises writers.
+  - `Relay.RunOnce` handles one batch. `Relay.Run` loops until the context ends.
+  - The host supplies the transport through the `Publisher` interface.
+  - `OutboxMessage.PartitionKey` orders the publish. A relay leases the whole
+    partition before it claims that partition's rows, so the messages of one
+    aggregate publish in id order even across replicas. Messages with different
+    keys go in parallel. A message with no key needs no order.
+  - A publish failure records `last_error` and releases the lease at once. A
+    message that reaches the attempt limit gets `dead_at`, and the relay stops
+    claiming it. Clear `dead_at` to replay it. `WithRelayOnDead` alerts a person.
+  - A message that a failed partition-mate skipped gets its lease and its
+    attempt back, so it never dies without one publish attempt.
+  - Options: `WithRelayBatchSize`, `WithRelayLease`, `WithRelayPollInterval`,
+    `WithRelayMaxAttempts`, `WithRelayWorkerID`, `WithRelayConcurrency`,
+    `WithRelayOnDead`, `WithRelayOnError`.
+  - Delivery is at-least-once. A publish that outlives its lease can run again on
+    another replica. Every replica must run a synchronised clock.
+- `OutboxSchema` emits the lease columns (`partition_key`, `claimed_by`,
+  `claimed_until`, `attempts`, `last_error`, `dead_at`) and the partition lease
+  table `<outbox>_partitions`.
+
+### Changed
+
+**Breaking.** `OutboxSchema` emits a wider table and a second table. An existing
+outbox needs a migration:
+
+```sql
+ALTER TABLE outbox
+    ADD COLUMN partition_key text,
+    ADD COLUMN claimed_by    text,
+    ADD COLUMN claimed_until timestamptz,
+    ADD COLUMN attempts      integer NOT NULL DEFAULT 0,
+    ADD COLUMN last_error    text,
+    ADD COLUMN dead_at       timestamptz;
+
+DROP INDEX idx_outbox_unprocessed;
+CREATE INDEX idx_outbox_unprocessed ON outbox (id)
+    WHERE processed_at IS NULL AND dead_at IS NULL;
+
+CREATE TABLE outbox_partitions (
+    partition_key text PRIMARY KEY,
+    claimed_by    text        NOT NULL,
+    claimed_until timestamptz NOT NULL
+);
+```
+
 ### Removed
 
 **Breaking.** The connectionless `UnitOfWork` is deleted. `Engine.NewUnitOfWork`,

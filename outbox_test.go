@@ -78,14 +78,14 @@ func TestOutboxSchema_EmitsPartialIndexSQLite(t *testing.T) {
 	// A partial index on unprocessed rows must be emitted so the relay's
 	// `WHERE processed_at IS NULL` poll does not full-scan a growing table.
 	assert.Contains(t, ddl,
-		`CREATE INDEX "idx_outbox_unprocessed" ON "outbox" ("id") WHERE "processed_at" IS NULL;`)
+		`CREATE INDEX "idx_outbox_unprocessed" ON "outbox" ("id") WHERE "processed_at" IS NULL AND "dead_at" IS NULL;`)
 }
 
 func TestOutboxSchema_EmitsPartialIndexPostgres(t *testing.T) {
 	ddl := drel.OutboxSchema("outbox", "postgres")
 	assert.Contains(t, ddl, `CREATE TABLE "outbox"`)
 	assert.Contains(t, ddl,
-		`CREATE INDEX "idx_outbox_unprocessed" ON "outbox" ("id") WHERE "processed_at" IS NULL;`)
+		`CREATE INDEX "idx_outbox_unprocessed" ON "outbox" ("id") WHERE "processed_at" IS NULL AND "dead_at" IS NULL;`)
 }
 
 // TestOutboxSchema_IndexExecutesAgainstSQLite proves the emitted DDL (table +

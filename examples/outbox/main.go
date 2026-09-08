@@ -12,8 +12,10 @@
 //     pending domain events into it within the same transaction.
 //   - Atomicity: when a transaction rolls back, no outbox row is left behind —
 //     you never publish an event for work that didn't commit.
-//   - Relay: a polling worker reads unprocessed rows, "publishes" them, and
-//     stamps processed_at. A second poll returns nothing — exactly-once.
+//   - Relay: drel.NewRelay claims a batch under a lease, publishes it, and
+//     stamps processed_at. A second poll returns nothing. The lease lets more
+//     than one replica poll one table, and partition_key keeps the events of
+//     one order in order.
 //
 // Runs against in-memory SQLite (pure-Go modernc.org/sqlite, no CGO and no
 // external database needed).
@@ -52,9 +54,19 @@ func main() {
 	setup(ctx, database)
 
 	// Register the outbox. From now on, every committed transaction also writes
-	// its domain events into the "outbox" table, transactionally. The default
-	// mapper stores Type = Go type name and Payload = the event as JSON.
-	database.UseOutbox("outbox")
+	// its domain events into the "outbox" table, transactionally. The mapper
+	// sets the partition key to the order id, so the relay publishes the events
+	// of one order in order, even when more than one replica runs.
+	database.UseOutbox("outbox", drel.WithOutboxMapper(func(ev any) (drel.OutboxMessage, bool) {
+		switch e := ev.(type) {
+		case orders.OrderPlaced:
+			return drel.OutboxMessage{Type: "order.placed", Payload: e, PartitionKey: e.OrderID.String()}, true
+		case orders.OrderShipped:
+			return drel.OutboxMessage{Type: "order.shipped", Payload: e, PartitionKey: e.OrderID.String()}, true
+		default:
+			return drel.OutboxMessage{}, false
+		}
+	}))
 
 	placeOrders(ctx, database)
 	showOutbox(ctx, database, "after placing & shipping orders")
@@ -141,53 +153,32 @@ func demoRollbackIsAtomic(ctx context.Context, database *db.DB) {
 }
 
 // ---------------------------------------------------------------------------
-// Relay: poll unprocessed messages, publish, mark processed (exactly-once)
+// Relay: drel claims a batch under a lease, publishes it, and marks it processed
 // ---------------------------------------------------------------------------
 
 func relay(ctx context.Context, database *db.DB) {
 	fmt.Println("\n=== Relay poll ===")
 
-	// Canonical relay poll. Backed by the partial index emitted by
-	// drel.OutboxSchema: WHERE processed_at IS NULL ORDER BY id.
-	rows, err := database.Query(ctx,
-		`SELECT id, type, payload FROM outbox WHERE processed_at IS NULL ORDER BY id`)
-	if err != nil {
+	published := 0
+	pub := drel.PublisherFunc(func(ctx context.Context, msg drel.ClaimedMessage) error {
+		// A real relay would publish to Kafka, NATS or an HTTP endpoint here.
+		fmt.Printf("  publish #%d %-12s %s\n", msg.ID, msg.Type, string(msg.Payload))
+		published++
+		return nil
+	})
+
+	// The lease lets more than one replica poll one table. partition_key keeps
+	// the messages of one aggregate in order.
+	r := drel.NewRelay(database.Engine, "outbox", pub, drel.WithRelayBatchSize(50))
+
+	if _, err := r.RunOnce(ctx); err != nil {
 		log.Fatal(err)
 	}
-
-	type message struct {
-		id      int
-		typ     string
-		payload string
-	}
-	var batch []message
-	for rows.Next() {
-		var m message
-		if err := rows.Scan(&m.id, &m.typ, &m.payload); err != nil {
-			rows.Close()
-			log.Fatal(err)
-		}
-		batch = append(batch, m)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		log.Fatal(err)
-	}
-
-	if len(batch) == 0 {
+	if published == 0 {
 		fmt.Println("  nothing to publish — outbox drained")
 		return
 	}
-
-	for _, m := range batch {
-		// A real relay would publish to Kafka/NATS/etc. here. We just print.
-		fmt.Printf("  publish #%d %-12s %s\n", m.id, m.typ, m.payload)
-		if _, err := database.Exec(ctx,
-			`UPDATE outbox SET processed_at = CURRENT_TIMESTAMP WHERE id = ?`, m.id); err != nil {
-			log.Fatal(err)
-		}
-	}
-	fmt.Printf("  published %d message(s)\n", len(batch))
+	fmt.Printf("  published %d message(s)\n", published)
 }
 
 // ---------------------------------------------------------------------------

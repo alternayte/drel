@@ -125,7 +125,10 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   version columns are honored in bulk paths.
 - **Domain events & outbox** -- record events on entities, dispatch them
   after commit, and optionally persist them to a transactional outbox table
-  via `Engine.UseOutbox`.
+  via `Engine.UseOutbox`. `drel.NewRelay` publishes the table: it claims a
+  batch under a lease, so more than one replica can poll one table, and it
+  keeps the messages of one `PartitionKey` in order. A failed message retries,
+  and it moves to the dead-letter state after the attempt limit.
 - **Pagination** -- offset (`PageOffset`) and keyset/cursor (`Page`) paging
   with a deterministic primary-key tiebreaker.
 - **Projections & aggregations** -- `Select`, `Aggregate`, `GroupBy` into
@@ -176,7 +179,7 @@ See [examples/](examples/) for working samples:
 - [bulk-ops](examples/bulk-ops/) -- batch operations
 - [api](examples/api/) -- dynamic query composition from HTTP parameters (IQueryable-style conditional `Where` chaining)
 - [multi-model](examples/multi-model/) -- domain events, transaction hooks
-- [outbox](examples/outbox/) -- transactional outbox: events persisted atomically with data, plus a polling relay
+- [outbox](examples/outbox/) -- transactional outbox: events persisted atomically with data, plus the lease-based relay
 - [observability](examples/observability/) -- structured query logging, tracing spans, and dev-mode diagnostics
 - [uuid-keys](examples/uuid-keys/) -- application-assigned UUIDv7 primary keys
 - [internals](examples/internals/) -- what codegen produces, hand-written, to see the machinery
