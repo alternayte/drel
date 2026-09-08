@@ -129,6 +129,10 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   batch under a lease, so more than one replica can poll one table, and it
   keeps the messages of one `PartitionKey` in order. A failed message retries,
   and it moves to the dead-letter state after the attempt limit.
+- **Test harness** -- `dreltest.WithRollback` runs one test inside one
+  transaction and rolls it back. The transaction travels in the context, so the
+  code under test joins it. On Postgres the tests can run in parallel against
+  one database.
 - **Inbox** -- `drel.NewInbox` suppresses a duplicate delivery. `Claim` writes
   the dedupe row in the same transaction as the application write, so the two
   commit together. The key is the pair of message ID and handler name.

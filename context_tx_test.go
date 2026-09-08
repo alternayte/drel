@@ -22,7 +22,7 @@ func TestMustFromContext_Panics(t *testing.T) {
 
 func TestFromContext_ReturnsStoredTx(t *testing.T) {
 	want := &Tx{}
-	ctx := contextWithTx(context.Background(), want)
+	ctx := ContextWithTx(context.Background(), want)
 
 	got, ok := FromContext(ctx)
 	if !ok || got != want {

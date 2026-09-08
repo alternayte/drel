@@ -64,6 +64,20 @@ minor versions may contain breaking changes.
   - The table carries a `processed_at` column that the design document did not
     list. Without it a failure record would block every retry of its own message.
 
+- **`dreltest.WithRollback`** runs a test inside a transaction and rolls that
+  transaction back. The transaction travels in the context, so code that calls
+  `Engine.WithTx` joins it through a savepoint instead of opening its own
+  transaction. Nothing the test writes reaches the next test, and no test needs
+  to recreate the schema. On Postgres the test functions can run in parallel
+  against one database.
+  - The rollback runs at test cleanup, so it also runs after `t.Fatal`.
+  - A SQLite engine drives one connection, so two parallel `WithRollback` calls
+    on one SQLite engine deadlock. Run the SQLite tests one after another, or
+    give each test its own engine.
+- **`drel.ContextWithTx`** puts a transaction in a context. `WithTx` calls it
+  for you. Call it directly when you open the transaction yourself, in a test
+  harness or in middleware that owns the transaction.
+
 ### Changed
 
 **Breaking.** `OutboxSchema` emits a wider table and a second table. An existing

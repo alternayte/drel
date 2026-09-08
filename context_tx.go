@@ -13,8 +13,12 @@ type txCtxKey struct{}
 // savepoint cannot change them.
 var ErrNestedTxOptions = errors.New("drel: transaction options are not allowed on a nested WithTx call")
 
-// contextWithTx returns a copy of ctx that carries tx.
-func contextWithTx(ctx context.Context, tx *Tx) context.Context {
+// ContextWithTx returns a copy of ctx that carries tx. WithTx calls it for you.
+// Call it directly when you open the transaction yourself, for example in a test
+// harness or in middleware that owns the transaction. Code below then finds the
+// transaction with FromContext or MustFromContext, and a nested WithTx call
+// joins it through a savepoint.
+func ContextWithTx(ctx context.Context, tx *Tx) context.Context {
 	return context.WithValue(ctx, txCtxKey{}, tx)
 }
 
@@ -55,10 +59,10 @@ func (e *Engine) WithTx(ctx context.Context, fn func(ctx context.Context) error,
 			return ErrNestedTxOptions
 		}
 		return outer.Savepoint(ctx, "withtx", func(sp *Tx) error {
-			return fn(contextWithTx(ctx, sp))
+			return fn(ContextWithTx(ctx, sp))
 		})
 	}
 	return e.Transaction(ctx, func(tx *Tx) error {
-		return fn(contextWithTx(ctx, tx))
+		return fn(ContextWithTx(ctx, tx))
 	}, opts...)
 }
