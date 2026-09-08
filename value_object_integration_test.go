@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/alternayte/drel"
-	vomodels "github.com/alternayte/drel/examples/value-objects/models"
 	"github.com/alternayte/drel/dreltest"
+	vomodels "github.com/alternayte/drel/examples/value-objects/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -36,11 +36,12 @@ func TestMultiColVO_RoundTrip_SQLite(t *testing.T) {
 	engine := newSQLiteEngine(t)
 	ctx := context.Background()
 
-	// Insert via UnitOfWork (exercises expanded InsertColumns).
-	uow := engine.NewUnitOfWork()
-	repo := drel.NewUoWRepository(uow, accounts.AccountMeta)
-	repo.Add(accounts.NewAccount("alice", accounts.NewMoney(100, "USD")))
-	require.NoError(t, uow.SaveChanges(ctx))
+	// Insert in a context transaction (exercises expanded InsertColumns).
+	require.NoError(t, engine.WithTx(ctx, func(ctx context.Context) error {
+		drel.NewTxRepository(drel.MustFromContext(ctx), accounts.AccountMeta).
+			Add(accounts.NewAccount("alice", accounts.NewMoney(100, "USD")))
+		return nil
+	}))
 
 	// Read back (exercises generated scan + DrelScanMulti).
 	read := drel.NewRepository(engine, accounts.AccountMeta)
@@ -50,13 +51,16 @@ func TestMultiColVO_RoundTrip_SQLite(t *testing.T) {
 	assert.Equal(t, 100, loaded.Balance().Amount())
 	assert.Equal(t, "USD", loaded.Balance().Currency())
 
-	// Mutate one sub-column, save (exercises per-sub-column diff).
-	uow2 := engine.NewUnitOfWork()
-	repo2 := drel.NewUoWRepository(uow2, accounts.AccountMeta)
-	acct, err := repo2.Find(ctx, loaded.ID())
-	require.NoError(t, err)
-	acct.SetBalance(accounts.NewMoney(250, "USD"))
-	require.NoError(t, uow2.SaveChanges(ctx))
+	// Mutate one sub-column, commit (exercises per-sub-column diff).
+	require.NoError(t, engine.WithTx(ctx, func(ctx context.Context) error {
+		acct, err := drel.NewTxRepository(drel.MustFromContext(ctx), accounts.AccountMeta).
+			Find(ctx, loaded.ID())
+		if err != nil {
+			return err
+		}
+		acct.SetBalance(accounts.NewMoney(250, "USD"))
+		return nil
+	}))
 
 	final, err := read.Find(ctx, loaded.ID())
 	require.NoError(t, err)

@@ -27,10 +27,13 @@ func TestOutboxSchema_PostgresIndexAndRelay(t *testing.T) {
 		Scan(&idxdef)
 	require.NoError(t, err)
 	assert.Contains(t, idxdef, "processed_at IS NULL")
+	assert.Contains(t, idxdef, "dead_at IS NULL")
 
-	// The canonical relay poll plans against the partial index, not a seq scan.
+	// The relay claim plans against the partial index, not a seq scan. The
+	// predicate must match the index, so it carries the dead_at test too.
 	rows, err := engine.Query(ctx,
-		`EXPLAIN SELECT id, type, payload FROM outbox WHERE processed_at IS NULL ORDER BY id`)
+		`EXPLAIN SELECT id, type, payload FROM outbox
+		 WHERE processed_at IS NULL AND dead_at IS NULL ORDER BY id`)
 	require.NoError(t, err)
 	defer rows.Close()
 	var plan, all string
@@ -40,7 +43,7 @@ func TestOutboxSchema_PostgresIndexAndRelay(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	assert.Contains(t, all, "idx_outbox_unprocessed",
-		"relay poll must use the partial index, got plan:\n"+all)
+		"the relay claim must use the partial index, got plan:\n"+all)
 }
 
 func TestBulkInsertWithEvents_PostgresAtomicOutbox(t *testing.T) {

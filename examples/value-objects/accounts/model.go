@@ -59,6 +59,6 @@ func NewAccount(owner string, balance Money) *Account {
 	return a
 }
 
-func (a *Account) Owner() string       { return a.owner }
-func (a *Account) Balance() Money      { return a.balance }
-func (a *Account) SetBalance(m Money)  { a.balance = m }
+func (a *Account) Owner() string      { return a.owner }
+func (a *Account) Balance() Money     { return a.balance }
+func (a *Account) SetBalance(m Money) { a.balance = m }

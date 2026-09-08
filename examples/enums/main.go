@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	fmt.Println(models.RoleAdmin.IsValid())    // true
+	fmt.Println(models.RoleAdmin.IsValid())     // true
 	fmt.Println(models.Role("bogus").IsValid()) // false
 	fmt.Println(models.RoleValues())
 	fmt.Println(models.PriorityHigh.IsValid()) // true

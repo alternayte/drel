@@ -8,7 +8,7 @@ drel is pre-1.0. Security fixes are applied to the latest `0.x` minor release.
 
 Please **do not** open a public issue for security-sensitive reports. Instead,
 use GitHub's private vulnerability reporting
-([Security → Report a vulnerability](https://github.com/alternayte/drel-go/security/advisories/new))
+([Security → Report a vulnerability](https://github.com/alternayte/drel/security/advisories/new))
 on this repository.
 
 Include a description, affected versions, and a minimal reproduction if possible.

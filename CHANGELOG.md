@@ -5,6 +5,139 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [0.6.0] - 2026-09-08
+
+Host-integration release. It gives an application framework the pieces it needs
+to own a request transaction: the transaction travels in the context, the outbox
+has a relay that more than one replica can run, the inbox suppresses a duplicate
+delivery, and one test runs in one transaction.
+
+### Added
+
+- **Transaction propagation through the context.** `Engine.WithTx(ctx, fn)`
+  opens a transaction, puts it in the context it passes to `fn`, and commits
+  when `fn` returns nil. `drel.FromContext(ctx)` returns the transaction.
+  `drel.MustFromContext(ctx)` returns it and panics when it is absent, so a
+  wiring fault fails at once. A nested `WithTx` call on the same engine reuses
+  the transaction and opens a savepoint. It does not begin a second
+  transaction, and it does not commit. A nested call that carries transaction
+  options returns `drel.ErrNestedTxOptions`. The behaviour is the same for
+  Postgres, SQLite and LibSQL.
+- Generated code gains `db.WithTx(ctx, fn, opts...)`, the `TxRepos` struct, and
+  `db.Tx(ctx)`, which returns the tracked repositories bound to the transaction
+  in the context.
+
+- **Outbox relay with leases** (`drel.NewRelay`). More than one replica can poll
+  one outbox table without publishing a message two times. A claim takes a lease
+  on a batch and increments the attempt counter. Postgres claims with
+  `FOR UPDATE SKIP LOCKED`. SQLite and LibSQL claim with a conditional `UPDATE`,
+  which is safe because SQLite serialises writers.
+  - `Relay.RunOnce` handles one batch. `Relay.Run` loops until the context ends.
+  - The host supplies the transport through the `Publisher` interface.
+  - `OutboxMessage.PartitionKey` orders the publish. A relay leases the whole
+    partition before it claims that partition's rows, so the messages of one
+    aggregate publish in id order even across replicas. Messages with different
+    keys go in parallel. A message with no key needs no order.
+  - A publish failure records `last_error` and releases the lease at once. A
+    message that reaches the attempt limit gets `dead_at`, and the relay stops
+    claiming it. Clear `dead_at` to replay it. `WithRelayOnDead` alerts a person.
+  - A message that a failed partition-mate skipped gets its lease and its
+    attempt back, so it never dies without one publish attempt.
+  - Options: `WithRelayBatchSize`, `WithRelayLease`, `WithRelayPollInterval`,
+    `WithRelayMaxAttempts`, `WithRelayWorkerID`, `WithRelayConcurrency`,
+    `WithRelayOnDead`, `WithRelayOnError`.
+  - Delivery is at-least-once. A publish that outlives its lease can run again on
+    another replica. Every replica must run a synchronised clock.
+- `OutboxSchema` emits the lease columns (`partition_key`, `claimed_by`,
+  `claimed_until`, `attempts`, `last_error`, `dead_at`) and the partition lease
+  table `<outbox>_partitions`.
+
+- **Inbox** (`drel.NewInbox`, `drel.InboxSchema`). A broker delivers at least
+  once, so one message can reach a handler more than one time. `Inbox.Claim`
+  writes the dedupe row inside the transaction that `WithTx` put in the context,
+  next to the application write, so the two commit together or neither commits.
+  - The key is the pair of message ID and handler name. Two handlers can process
+    one message. One handler cannot process one message two times.
+  - `Claim` returns `drel.ErrDuplicateMessage` when the handler already processed
+    the message. It panics when the context carries no transaction, because a
+    dedupe row outside the application transaction gives no protection.
+  - A failed handler rolls the transaction back, and the dedupe row goes with it.
+    `Inbox.Fail` then records the attempt and the error outside the transaction.
+    A late failure cannot reopen a message that already succeeded.
+  - `Inbox.Purge` deletes the rows received before a time. Purge only beyond the
+    retention of the broker.
+  - The table carries a `processed_at` column that the design document did not
+    list. Without it a failure record would block every retry of its own message.
+
+- **`dreltest.WithRollback`** runs a test inside a transaction and rolls that
+  transaction back. The transaction travels in the context, so code that calls
+  `Engine.WithTx` joins it through a savepoint instead of opening its own
+  transaction. Nothing the test writes reaches the next test, and no test needs
+  to recreate the schema. On Postgres the test functions can run in parallel
+  against one database.
+  - The rollback runs at test cleanup, so it also runs after `t.Fatal`.
+  - A SQLite engine drives one connection, so two parallel `WithRollback` calls
+    on one SQLite engine deadlock. Run the SQLite tests one after another, or
+    give each test its own engine.
+- **`drel.ContextWithTx`** puts a transaction in a context. `WithTx` calls it
+  for you. Call it directly when you open the transaction yourself, in a test
+  harness or in middleware that owns the transaction.
+
+### Changed
+
+**Breaking.** `OutboxSchema` emits a wider table and a second table. An existing
+outbox needs a migration:
+
+```sql
+ALTER TABLE outbox
+    ADD COLUMN partition_key text,
+    ADD COLUMN claimed_by    text,
+    ADD COLUMN claimed_until timestamptz,
+    ADD COLUMN attempts      integer NOT NULL DEFAULT 0,
+    ADD COLUMN last_error    text,
+    ADD COLUMN dead_at       timestamptz;
+
+DROP INDEX idx_outbox_unprocessed;
+CREATE INDEX idx_outbox_unprocessed ON outbox (id)
+    WHERE processed_at IS NULL AND dead_at IS NULL;
+
+CREATE TABLE outbox_partitions (
+    partition_key text PRIMARY KEY,
+    claimed_by    text        NOT NULL,
+    claimed_until timestamptz NOT NULL
+);
+```
+
+### Removed
+
+**Breaking.** The connectionless `UnitOfWork` is deleted. `Engine.NewUnitOfWork`,
+`drel.UnitOfWork`, `drel.UoWRepository`, `drel.NewUoWRepository`, the generated
+`UnitOfWork` struct, the generated `db.NewUnitOfWork` and the generated
+`UoW<Model>Repository` types are all gone.
+
+`UnitOfWork` held no connection. `SaveChanges` opened its own short transaction
+and committed it, so a caller could not write an application row and a control
+row (an outbox entry, an inbox dedupe row, a projection checkpoint) in one
+transaction. `Tx` holds the connection, so the context now carries `*Tx`.
+
+Migration:
+
+```go
+// before
+uow := database.NewUnitOfWork()
+uow.Users.Add(u)
+err := uow.SaveChanges(ctx)
+
+// after
+err := database.WithTx(ctx, func(ctx context.Context) error {
+    database.Tx(ctx).Users.Add(u)
+    return nil
+})
+```
+
+The flush is automatic at commit. Call `drel.MustFromContext(ctx).SaveChanges(ctx)`
+only when later work in the same transaction needs the generated ids.
+
 ## [0.5.0] - 2026-06-15
 
 Production-readiness release. A broad pass over correctness, feature
@@ -234,9 +367,10 @@ Initial release: Postgres (pgx) core, code generation (model scanning, query
 builders, scan/snapshot/diff), basic CRUD, snapshot-based change tracking,
 implicit transactions, and the type-safe query builder.
 
-[0.5.0]: https://github.com/alternayte/drel-go/releases/tag/v0.5.0
-[0.4.0]: https://github.com/alternayte/drel-go/releases/tag/v0.4.0
-[0.3.2]: https://github.com/alternayte/drel-go/releases/tag/v0.3.2
-[0.3.1]: https://github.com/alternayte/drel-go/releases/tag/v0.3.1
-[0.3.0]: https://github.com/alternayte/drel-go/releases/tag/v0.3.0
-[0.1.0]: https://github.com/alternayte/drel-go/releases/tag/v0.1.0
+[0.6.0]: https://github.com/alternayte/drel/releases/tag/v0.6.0
+[0.5.0]: https://github.com/alternayte/drel/releases/tag/v0.5.0
+[0.4.0]: https://github.com/alternayte/drel/releases/tag/v0.4.0
+[0.3.2]: https://github.com/alternayte/drel/releases/tag/v0.3.2
+[0.3.1]: https://github.com/alternayte/drel/releases/tag/v0.3.1
+[0.3.0]: https://github.com/alternayte/drel/releases/tag/v0.3.0
+[0.1.0]: https://github.com/alternayte/drel/releases/tag/v0.1.0

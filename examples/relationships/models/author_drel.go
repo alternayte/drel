@@ -107,11 +107,3 @@ type TxAuthorRepository struct {
 func (r *TxAuthorRepository) FindByID(ctx context.Context, id int) (*Author, error) {
 	return r.Find(ctx, id)
 }
-
-type UoWAuthorRepository struct {
-	*drel.UoWRepository[Author]
-}
-
-func (r *UoWAuthorRepository) FindByID(ctx context.Context, id int) (*Author, error) {
-	return r.Find(ctx, id)
-}

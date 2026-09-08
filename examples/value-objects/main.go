@@ -28,9 +28,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	uow := database.NewUnitOfWork()
-	uow.Accounts.Add(accounts.NewAccount("alice", accounts.NewMoney(100, "USD")))
-	if err := uow.SaveChanges(ctx); err != nil {
+	if err := database.WithTx(ctx, func(ctx context.Context) error {
+		database.Tx(ctx).Accounts.Add(accounts.NewAccount("alice", accounts.NewMoney(100, "USD")))
+		return nil
+	}); err != nil {
 		log.Fatal(err)
 	}
 

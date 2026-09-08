@@ -13,9 +13,13 @@ import (
 // column. Messages are written within the same transaction as the changes that
 // produced the events, giving exactly-once hand-off to an external relay
 // (Debezium CDC, a polling worker, etc.).
+// PartitionKey orders the relay publish. Messages that carry the same key are
+// published in id order. Messages with different keys can go in parallel. Leave
+// it empty when the message needs no order; the column then stays NULL.
 type OutboxMessage struct {
-	Type    string
-	Payload any
+	Type         string
+	Payload      any
+	PartitionKey string
 }
 
 type outboxConfig struct {
@@ -59,8 +63,13 @@ func (e *Engine) UseOutbox(table string, opts ...OutboxOption) {
 			if err != nil {
 				return fmt.Errorf("drel: outbox marshal %s: %w", msg.Type, err)
 			}
-			res := e.dia.BuildInsert(cfg.table, []string{"type", "payload"},
-				[]any{msg.Type, string(payload)}, nil)
+			cols := []string{"type", "payload"}
+			vals := []any{msg.Type, string(payload)}
+			if msg.PartitionKey != "" {
+				cols = append(cols, "partition_key")
+				vals = append(vals, msg.PartitionKey)
+			}
+			res := e.dia.BuildInsert(cfg.table, cols, vals, nil)
 			if _, err := tx.Exec(ctx, res.SQL, res.Args...); err != nil {
 				return fmt.Errorf("drel: outbox insert into %s: %w", cfg.table, err)
 			}
@@ -111,9 +120,13 @@ func eventTypeName(v any) (string, error) {
 // TEXT for portability (JSON is stored as a string); processed_at is left for a
 // relay to stamp.
 //
-// A partial index on unprocessed rows is emitted so the canonical relay poll
+// The lease columns (claimed_by, claimed_until, attempts, last_error, dead_at)
+// let more than one Relay replica poll one table without publishing a message
+// two times. partition_key orders the publish inside one aggregate.
 //
-//	SELECT id, type, payload FROM <table> WHERE processed_at IS NULL ORDER BY id;
+// A partial index on open rows is emitted so the relay claim
+//
+//	SELECT id FROM <table> WHERE processed_at IS NULL AND dead_at IS NULL ORDER BY id;
 //
 // uses an index seek rather than a sequential scan that grows with total outbox
 // size (processed rows are typically retained for audit).
@@ -121,23 +134,57 @@ func OutboxSchema(table, dialect string) string {
 	q := `"` + table + `"`
 	idx := `"idx_` + table + `_unprocessed"`
 	index := fmt.Sprintf(
-		`CREATE INDEX %s ON %s ("id") WHERE "processed_at" IS NULL;`+"\n", idx, q)
+		`CREATE INDEX %s ON %s ("id") WHERE "processed_at" IS NULL AND "dead_at" IS NULL;`+"\n", idx, q)
 	if dialect == "sqlite" {
 		return fmt.Sprintf(`CREATE TABLE %s (
     "id" INTEGER PRIMARY KEY AUTOINCREMENT,
     "type" TEXT NOT NULL,
     "payload" TEXT NOT NULL,
+    "partition_key" TEXT,
     "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "processed_at" DATETIME
+    "processed_at" DATETIME,
+    "claimed_by" TEXT,
+    "claimed_until" DATETIME,
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "last_error" TEXT,
+    "dead_at" DATETIME
 );
-%s`, q, index)
+%s%s`, q, index, partitionSchema(table, "sqlite"))
 	}
 	return fmt.Sprintf(`CREATE TABLE %s (
     "id" BIGSERIAL PRIMARY KEY,
     "type" TEXT NOT NULL,
     "payload" TEXT NOT NULL,
+    "partition_key" TEXT,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    "processed_at" TIMESTAMPTZ
+    "processed_at" TIMESTAMPTZ,
+    "claimed_by" TEXT,
+    "claimed_until" TIMESTAMPTZ,
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "last_error" TEXT,
+    "dead_at" TIMESTAMPTZ
 );
-%s`, q, index)
+%s%s`, q, index, partitionSchema(table, "postgres"))
+}
+
+// partitionSchema emits the partition lease table of an outbox. A Relay leases a
+// partition key here before it claims the messages of that partition, so two
+// replicas never publish one partition at the same time. The order inside a
+// partition therefore holds across replicas.
+func partitionSchema(table, dialect string) string {
+	q := `"` + table + `_partitions"`
+	if dialect == "sqlite" {
+		return fmt.Sprintf(`CREATE TABLE %s (
+    "partition_key" TEXT PRIMARY KEY,
+    "claimed_by" TEXT NOT NULL,
+    "claimed_until" DATETIME NOT NULL
+);
+`, q)
+	}
+	return fmt.Sprintf(`CREATE TABLE %s (
+    "partition_key" TEXT PRIMARY KEY,
+    "claimed_by" TEXT NOT NULL,
+    "claimed_until" TIMESTAMPTZ NOT NULL
+);
+`, q)
 }

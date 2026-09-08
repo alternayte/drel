@@ -104,7 +104,59 @@ func Begin(t testingTB, engine *drel.Engine) *drel.Tx {
 		t.Fatalf("dreltest.Begin: requires a SQLite/libSQL engine, got dialect %q", engine.DialectName())
 		return nil
 	}
+	tx, err := park(t, engine)
+	if err != nil {
+		t.Fatalf("dreltest.Begin: %v", err)
+		return nil
+	}
+	return tx
+}
 
+// WithRollback runs fn inside a transaction and rolls that transaction back.
+// The transaction travels in the context, so code that calls Engine.WithTx
+// joins it through a savepoint instead of opening its own transaction. Nothing
+// fn writes reaches the next test.
+//
+// Use it for every test that touches the database. On Postgres the test
+// functions can then run in parallel against one database, and no test needs to
+// recreate the schema.
+//
+//	func TestPlaceOrder(t *testing.T) {
+//	    dreltest.WithRollback(t, engine, func(ctx context.Context) {
+//	        err := service.PlaceOrder(ctx, order) // calls db.WithTx inside
+//	        require.NoError(t, err)
+//	    })
+//	}
+//
+// The rollback runs at test cleanup, so it also runs after t.Fatal. A failed
+// test does not leak an open transaction.
+//
+// Three limits hold.
+//
+// A test that needs a second connection to read fn's writes cannot use
+// WithRollback, because nothing is committed.
+//
+// On Postgres the transaction holds one pooled connection for the whole test,
+// so the pool must be larger than the count of parallel tests.
+//
+// A SQLite engine drives one connection. Two parked transactions therefore
+// cannot exist at one time, and two parallel WithRollback calls on one SQLite
+// engine deadlock. Run the SQLite tests one after another, or give each test
+// its own engine with NewSQLite.
+func WithRollback(t testingTB, engine *drel.Engine, fn func(ctx context.Context)) {
+	t.Helper()
+	tx, err := park(t, engine)
+	if err != nil {
+		t.Fatalf("dreltest.WithRollback: %v", err)
+		return
+	}
+	fn(drel.ContextWithTx(context.Background(), tx))
+}
+
+// park opens a transaction and holds it open in its own goroutine. The
+// transaction rolls back at test cleanup, which the testing package runs even
+// after t.Fatal unwinds the test goroutine.
+func park(t testingTB, engine *drel.Engine) (*drel.Tx, error) {
 	type ready struct {
 		tx  *drel.Tx
 		err error
@@ -134,15 +186,14 @@ func Begin(t testingTB, engine *drel.Engine) *drel.Tx {
 
 	r := <-readyCh
 	if r.err != nil {
-		t.Fatalf("dreltest.Begin: %v", r.err)
-		return nil
+		return nil, r.err
 	}
 
 	t.Cleanup(func() {
 		close(release)
 		<-done // ensure rollback completed before the next test reads
 	})
-	return r.tx
+	return r.tx, nil
 }
 
 // errRelease is returned from the Begin transaction's fn to trigger a rollback

@@ -12,6 +12,12 @@ EF Core-level developer experience.
 go install github.com/alternayte/drel/cmd/drel@latest
 ```
 
+## Install
+
+```bash
+go get github.com/alternayte/drel
+```
+
 ## Quick Start
 
 ### 1. Define a model
@@ -50,10 +56,11 @@ helpers, and a `DB` struct that aggregates all discovered models.
 // Open the generated DB
 database, err := db.Open(dsn)
 
-// Insert via a UnitOfWork (change-tracking work session)
-uow := database.NewUnitOfWork()
-uow.Tasks.Add(models.NewTask("Build ORM", 1))
-err = uow.SaveChanges(ctx)
+// Insert inside a transaction that travels through the context
+err = database.WithTx(ctx, func(ctx context.Context) error {
+    database.Tx(ctx).Tasks.Add(models.NewTask("Build ORM", 1))
+    return nil
+})
 
 // Query with generated type-safe columns (read-only, untracked)
 tasks, err := database.Tasks.
@@ -62,12 +69,17 @@ tasks, err := database.Tasks.
     All(ctx)
 
 // Update with change tracking (only modified columns are UPDATEd)
-uow = database.NewUnitOfWork()
-task, err := uow.Tasks.Find(ctx, 1) // tracked
-if err == nil {
+err = database.WithTx(ctx, func(ctx context.Context) error {
+    task, err := database.Tx(ctx).Tasks.Find(ctx, 1) // tracked
+    if err != nil {
+        return err
+    }
     task.MarkDone()
-    err = uow.SaveChanges(ctx)
-}
+    return nil
+})
+
+// A nested WithTx call joins the same transaction through a savepoint.
+// Reach the transaction anywhere with drel.MustFromContext(ctx).
 
 // Or an explicit multi-statement transaction:
 err = database.Transaction(ctx, func(tx *drel.Tx) error {
@@ -101,7 +113,7 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   (`Tx.AdvisoryLock` / `TryAdvisoryLock`; a SQLite no-op), automatic retry on
   serialization failures (`TransactionWithRetry` / `WithRetry`), and automatic
   flush on commit. Projections, includes, bulk operations, and batching all run
-  on the transaction's own connection inside an explicit `Tx` or `UnitOfWork`.
+  on the transaction's own connection inside an explicit `Tx`.
 - **Soft delete, versioning, audit** -- embed `drel.SoftDelete`,
   `drel.Versioned`, or `drel.Audit` for automatic column management.
 - **Primary keys** -- integer auto-increment by default, or application-assigned
@@ -119,7 +131,17 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   version columns are honored in bulk paths.
 - **Domain events & outbox** -- record events on entities, dispatch them
   after commit, and optionally persist them to a transactional outbox table
-  via `Engine.UseOutbox`.
+  via `Engine.UseOutbox`. `drel.NewRelay` publishes the table: it claims a
+  batch under a lease, so more than one replica can poll one table, and it
+  keeps the messages of one `PartitionKey` in order. A failed message retries,
+  and it moves to the dead-letter state after the attempt limit.
+- **Test harness** -- `dreltest.WithRollback` runs one test inside one
+  transaction and rolls it back. The transaction travels in the context, so the
+  code under test joins it. On Postgres the tests can run in parallel against
+  one database.
+- **Inbox** -- `drel.NewInbox` suppresses a duplicate delivery. `Claim` writes
+  the dedupe row in the same transaction as the application write, so the two
+  commit together. The key is the pair of message ID and handler name.
 - **Pagination** -- offset (`PageOffset`) and keyset/cursor (`Page`) paging
   with a deterministic primary-key tiebreaker.
 - **Projections & aggregations** -- `Select`, `Aggregate`, `GroupBy` into
@@ -170,7 +192,7 @@ See [examples/](examples/) for working samples:
 - [bulk-ops](examples/bulk-ops/) -- batch operations
 - [api](examples/api/) -- dynamic query composition from HTTP parameters (IQueryable-style conditional `Where` chaining)
 - [multi-model](examples/multi-model/) -- domain events, transaction hooks
-- [outbox](examples/outbox/) -- transactional outbox: events persisted atomically with data, plus a polling relay
+- [outbox](examples/outbox/) -- transactional outbox: events persisted atomically with data, plus the lease-based relay
 - [observability](examples/observability/) -- structured query logging, tracing spans, and dev-mode diagnostics
 - [uuid-keys](examples/uuid-keys/) -- application-assigned UUIDv7 primary keys
 - [internals](examples/internals/) -- what codegen produces, hand-written, to see the machinery

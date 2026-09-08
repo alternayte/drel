@@ -168,16 +168,16 @@ func NewTimeCol(name string) TimeColumn {
 	return TimeColumn{col: NewCol[time.Time](name)}
 }
 
-func (c TimeColumn) Name() string                      { return c.col.name }
-func (c TimeColumn) Eq(v time.Time) Predicate          { return c.col.Eq(v) }
-func (c TimeColumn) NEQ(v time.Time) Predicate         { return c.col.NEQ(v) }
-func (c TimeColumn) IsNull() Predicate                 { return c.col.IsNull() }
-func (c TimeColumn) IsNotNull() Predicate              { return c.col.IsNotNull() }
-func (c TimeColumn) In(vs ...time.Time) Predicate      { return c.col.In(vs...) }
-func (c TimeColumn) NotIn(vs ...time.Time) Predicate   { return c.col.NotIn(vs...) }
-func (c TimeColumn) Asc() OrderExpr                    { return c.col.Asc() }
-func (c TimeColumn) Desc() OrderExpr                   { return c.col.Desc() }
-func (c TimeColumn) ColRef() ColumnRef                 { return ColumnRef{name: c.col.name} }
+func (c TimeColumn) Name() string                    { return c.col.name }
+func (c TimeColumn) Eq(v time.Time) Predicate        { return c.col.Eq(v) }
+func (c TimeColumn) NEQ(v time.Time) Predicate       { return c.col.NEQ(v) }
+func (c TimeColumn) IsNull() Predicate               { return c.col.IsNull() }
+func (c TimeColumn) IsNotNull() Predicate            { return c.col.IsNotNull() }
+func (c TimeColumn) In(vs ...time.Time) Predicate    { return c.col.In(vs...) }
+func (c TimeColumn) NotIn(vs ...time.Time) Predicate { return c.col.NotIn(vs...) }
+func (c TimeColumn) Asc() OrderExpr                  { return c.col.Asc() }
+func (c TimeColumn) Desc() OrderExpr                 { return c.col.Desc() }
+func (c TimeColumn) ColRef() ColumnRef               { return ColumnRef{name: c.col.name} }
 
 func (c TimeColumn) GT(v time.Time) Predicate  { return newComparison(c.col.name, ast.OpGT, v) }
 func (c TimeColumn) GTE(v time.Time) Predicate { return newComparison(c.col.name, ast.OpGTE, v) }

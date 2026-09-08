@@ -66,7 +66,7 @@ func TestErrorClassification_NoFalsePositive(t *testing.T) {
 	assert.False(t, errors.Is(err, drel.ErrForeignKeyViolation))
 }
 
-// uniqItem maps the parent table for the SaveChanges path.
+// uniqItem maps the parent table for the flush path.
 type uniqItem struct {
 	ID        int
 	Name      string
@@ -74,7 +74,7 @@ type uniqItem struct {
 	UpdatedAt time.Time
 }
 
-func TestErrorClassification_SaveChangesPath(t *testing.T) {
+func TestErrorClassification_FlushPath(t *testing.T) {
 	engine, err := drel.NewEngine(":memory:")
 	require.NoError(t, err)
 	defer engine.Close()
@@ -99,14 +99,16 @@ func TestErrorClassification_SaveChangesPath(t *testing.T) {
 	}
 
 	// First insert succeeds.
-	uow := engine.NewUnitOfWork()
-	drel.NewUoWRepository(uow, meta).Add(&uniqItem{Name: "x"})
-	require.NoError(t, uow.SaveChanges(ctx))
+	require.NoError(t, engine.WithTx(ctx, func(ctx context.Context) error {
+		drel.NewTxRepository(drel.MustFromContext(ctx), meta).Add(&uniqItem{Name: "x"})
+		return nil
+	}))
 
-	// Duplicate name through SaveChanges must surface ErrUniqueViolation.
-	uow2 := engine.NewUnitOfWork()
-	drel.NewUoWRepository(uow2, meta).Add(&uniqItem{Name: "x"})
-	err = uow2.SaveChanges(ctx)
+	// A duplicate name through the flush must surface ErrUniqueViolation.
+	err = engine.WithTx(ctx, func(ctx context.Context) error {
+		drel.NewTxRepository(drel.MustFromContext(ctx), meta).Add(&uniqItem{Name: "x"})
+		return nil
+	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, drel.ErrUniqueViolation), "got %v", err)
 }

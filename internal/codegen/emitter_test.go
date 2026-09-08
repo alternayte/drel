@@ -777,3 +777,15 @@ func extractLine(s, substr string) string {
 	}
 	return ""
 }
+
+// TestEmitTypedRepos_NoUoWRepository proves the UoW repository type is no
+// longer emitted for a model.
+func TestEmitTypedRepos_NoUoWRepository(t *testing.T) {
+	var b strings.Builder
+	emitTypedRepos(&b, ModelInfo{Name: "User", PKType: "int"})
+	out := b.String()
+
+	assert.Contains(t, out, "type UserRepository struct {")
+	assert.Contains(t, out, "type TxUserRepository struct {")
+	assert.NotContains(t, out, "UoW")
+}

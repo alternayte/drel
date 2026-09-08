@@ -197,7 +197,7 @@ func TestIsNoRows_SqlErrNoRows(t *testing.T) {
 	assert.Equal(t, "no rows in result set", pgxLike.Error())
 }
 
-// ─── Retry after failed SaveChanges ─────────────────────────────────────────
+// ─── Retry after a failed flush ─────────────────────────────────────────────
 
 // headlineRetryHook is a before-commit hook that fails exactly once, then
 // succeeds, to simulate a transient commit/hook failure followed by a retry.
@@ -211,25 +211,24 @@ func (h *headlineRetryHook) hook(ctx context.Context, tx *drel.Tx, events []any)
 	return nil
 }
 
-func TestUnitOfWork_RetryAfterFailedSaveChangesPersists(t *testing.T) {
+func TestWithTx_RetryAfterFailedFlushPersistsOnce(t *testing.T) {
 	engine := setupSQLiteEngine(t)
 	ctx := context.Background()
 
 	h := &headlineRetryHook{}
 	engine.OnBeforeCommit(h.hook)
 
-	uow := engine.NewUnitOfWork()
-	repo := drel.NewUoWRepository(uow, sqliteItemMeta)
 	item := &sqliteItem{Title: "retry-me"}
-	repo.Add(item)
+	add := func(ctx context.Context) error {
+		drel.NewTxRepository(drel.MustFromContext(ctx), sqliteItemMeta).Add(item)
+		return nil
+	}
 
-	// First SaveChanges fails at the before-commit hook -> rollback.
-	err := uow.SaveChanges(ctx)
-	require.Error(t, err)
+	// The first attempt fails at the before-commit hook, so it rolls back.
+	require.Error(t, engine.WithTx(ctx, add))
 
-	// The staged Add must survive: a retry on the SAME unit of work re-emits
-	// the INSERT and persists exactly one row.
-	require.NoError(t, uow.SaveChanges(ctx))
+	// A retry with the same entity re-emits the INSERT and persists one row.
+	require.NoError(t, engine.WithTx(ctx, add))
 
 	check := drel.NewRepository(engine, sqliteItemMeta)
 	n, err := check.Count(ctx)
@@ -238,10 +237,10 @@ func TestUnitOfWork_RetryAfterFailedSaveChangesPersists(t *testing.T) {
 	assert.NotZero(t, item.ID, "the persisted row's id must be populated after the successful retry")
 }
 
-// ─── Event preservation across failed-then-retried SaveChanges ──────────────
+// ─── Event preservation across a failed-then-retried flush ──────────────────
 
 // eventItem is a tracked model that records domain events, for verifying event
-// preservation across a failed-then-retried SaveChanges.
+// preservation across a failed-then-retried flush.
 type eventItem struct {
 	drel.Model[int]
 	Title string
@@ -290,7 +289,7 @@ func setupEventItemEngine(t *testing.T) *drel.Engine {
 	return engine
 }
 
-func TestUnitOfWork_EventsPreservedAcrossFailedRetry(t *testing.T) {
+func TestWithTx_EventsPreservedAcrossFailedRetry(t *testing.T) {
 	engine := setupEventItemEngine(t)
 	ctx := context.Background()
 
@@ -302,14 +301,15 @@ func TestUnitOfWork_EventsPreservedAcrossFailedRetry(t *testing.T) {
 		received = append(received, events...)
 	})
 
-	uow := engine.NewUnitOfWork()
-	repo := drel.NewUoWRepository(uow, eventItemMeta)
 	item := &eventItem{Title: "evt"}
 	item.RecordEvent(eventItemCreated{Title: "evt"})
-	repo.Add(item)
+	add := func(ctx context.Context) error {
+		drel.NewTxRepository(drel.MustFromContext(ctx), eventItemMeta).Add(item)
+		return nil
+	}
 
-	require.Error(t, uow.SaveChanges(ctx)) // first attempt fails at the hook
-	require.NoError(t, uow.SaveChanges(ctx)) // retry succeeds
+	require.Error(t, engine.WithTx(ctx, add))   // the first attempt fails at the hook
+	require.NoError(t, engine.WithTx(ctx, add)) // the retry succeeds
 
 	// The domain event must reach the after-commit handler exactly once.
 	require.Len(t, received, 1)

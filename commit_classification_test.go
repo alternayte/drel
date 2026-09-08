@@ -57,13 +57,12 @@ func TestTransaction_CommitErrorClassified(t *testing.T) {
 	}
 }
 
-func TestSaveChanges_CommitErrorClassified(t *testing.T) {
+func TestWithTx_CommitErrorClassified(t *testing.T) {
 	drv := &commitErrDriver{commitErr: errors.New("database is locked")}
 	e := &Engine{drv: drv}
-	uow := e.NewUnitOfWork()
-	err := uow.SaveChanges(context.Background())
+	err := e.WithTx(context.Background(), func(context.Context) error { return nil })
 	if !errors.Is(err, dberr.ErrSerializationFailure) {
-		t.Fatalf("SaveChanges commit error must classify as ErrSerializationFailure, got %v", err)
+		t.Fatalf("WithTx commit error must classify as ErrSerializationFailure, got %v", err)
 	}
 }
 

@@ -83,15 +83,17 @@ func TestIdentityMap_FindTwiceReturnsSamePointer(t *testing.T) {
 	ctx := context.Background()
 	id := seedIdmapRow(t, engine, "Original")
 
-	uow := engine.NewUnitOfWork()
-	repo := drel.NewUoWRepository(uow, idmapMeta)
+	require.NoError(t, engine.WithTx(ctx, func(ctx context.Context) error {
+		repo := drel.NewTxRepository(drel.MustFromContext(ctx), idmapMeta)
 
-	a, err := repo.Find(ctx, id)
-	require.NoError(t, err)
-	b, err := repo.Find(ctx, id) // second load via the same UoW
-	require.NoError(t, err)
+		a, err := repo.Find(ctx, id)
+		require.NoError(t, err)
+		b, err := repo.Find(ctx, id) // second load through the same context transaction
+		require.NoError(t, err)
 
-	assert.Same(t, a, b, "two Find(id) calls through one UoW must return the same tracked instance")
+		assert.Same(t, a, b, "two Find(id) calls in one transaction must return the same tracked instance")
+		return nil
+	}))
 }
 
 func TestIdentityMap_TxFindTwiceReturnsSamePointer(t *testing.T) {
@@ -125,9 +127,7 @@ func TestIdentityMap_TxFindTwiceReturnsSamePointer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify a single coherent persisted value.
-	verifyUow := engine.NewUnitOfWork()
-	verifyRepo := drel.NewUoWRepository(verifyUow, idmapMeta)
-	got, err := verifyRepo.Find(ctx, id)
+	got, err := drel.NewRepository(engine, idmapMeta).Find(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "Updated", got.Title)
 }
@@ -137,29 +137,27 @@ func TestIdentityMap_NoLostUpdateAcrossPaths(t *testing.T) {
 	ctx := context.Background()
 	id := seedIdmapRow(t, engine, "Original")
 
-	uow := engine.NewUnitOfWork()
-	repo := drel.NewUoWRepository(uow, idmapMeta)
+	require.NoError(t, engine.WithTx(ctx, func(ctx context.Context) error {
+		repo := drel.NewTxRepository(drel.MustFromContext(ctx), idmapMeta)
 
-	// Path 1: load and mutate.
-	a, err := repo.Find(ctx, id)
-	require.NoError(t, err)
-	a.Title = "Updated"
+		// Path 1: load and mutate.
+		a, err := repo.Find(ctx, id)
+		require.NoError(t, err)
+		a.Title = "Updated"
 
-	// Path 2: load again via Where (different query path, same row). Before the
-	// identity map this produced a second, stale tracked instance whose flush
-	// clobbered path 1's change (last-writer-wins). Now it is the same pointer.
-	others, err := repo.Where(drel.Raw("id = ?", id)).All(ctx)
-	require.NoError(t, err)
-	require.Len(t, others, 1)
-	assert.Same(t, a, others[0], "Where load of the same row must reuse the canonical instance")
-	assert.Equal(t, "Updated", others[0].Title, "the canonical instance carries path 1's mutation")
+		// Path 2: load again via Where (different query path, same row). Before the
+		// identity map this produced a second, stale tracked instance whose flush
+		// clobbered path 1's change (last-writer-wins). Now it is the same pointer.
+		others, err := repo.Where(drel.Raw("id = ?", id)).All(ctx)
+		require.NoError(t, err)
+		require.Len(t, others, 1)
+		assert.Same(t, a, others[0], "Where load of the same row must reuse the canonical instance")
+		assert.Equal(t, "Updated", others[0].Title, "the canonical instance carries path 1's mutation")
+		return nil
+	}))
 
-	require.NoError(t, uow.SaveChanges(ctx))
-
-	// Reload in a fresh UoW: exactly one coherent value, no clobber.
-	reloadUow := engine.NewUnitOfWork()
-	reloadRepo := drel.NewUoWRepository(reloadUow, idmapMeta)
-	got, err := reloadRepo.Find(ctx, id)
+	// Reload outside the transaction: exactly one coherent value, no clobber.
+	got, err := drel.NewRepository(engine, idmapMeta).Find(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "Updated", got.Title)
 }

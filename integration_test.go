@@ -6,46 +6,18 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/alternayte/drel"
 	"github.com/alternayte/drel/internal/testmodels"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func setupTestDB(t *testing.T) *drel.Engine {
 	t.Helper()
-	ctx := context.Background()
+	engine := newTestEngine(t)
 
-	container, err := tcpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tcpostgres.WithDatabase("dreltest"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(30*time.Second),
-		),
-	)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		require.NoError(t, container.Terminate(ctx))
-	})
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	engine, err := drel.NewEngine(connStr, drel.WithContext(ctx))
-	require.NoError(t, err)
-	t.Cleanup(func() { engine.Close() })
-
-	_, err = engine.Exec(ctx, `
+	_, err := engine.Exec(context.Background(), `
 		CREATE TABLE products (
 			id         SERIAL PRIMARY KEY,
 			name       TEXT NOT NULL,

@@ -131,11 +131,3 @@ type TxNoteRepository struct {
 func (r *TxNoteRepository) FindByID(ctx context.Context, id int) (*Note, error) {
 	return r.Find(ctx, id)
 }
-
-type UoWNoteRepository struct {
-	*drel.UoWRepository[Note]
-}
-
-func (r *UoWNoteRepository) FindByID(ctx context.Context, id int) (*Note, error) {
-	return r.Find(ctx, id)
-}
