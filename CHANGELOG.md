@@ -27,6 +27,17 @@ minor versions may contain breaking changes.
 - `drel.EventTypeName` is exported. The outbox and the event store name an event
   the same way, so one event carries one name everywhere.
 
+- **Projection checkpoints** (`es.NewCheckpoints`, `es.CheckpointSchema`).
+  `Save` stores the position of a projection inside the transaction in the
+  context, next to the read model write, so a projection can never record
+  progress that it did not make. `Load` returns the zero position for an unknown
+  projection, and `Reset` returns a projection to the beginning for a replay.
+  - `Save` panics without a transaction. `Load` and `Reset` use the transaction
+    when one is present, so a replay can clear the read model and the checkpoint
+    together.
+  - The table holds `xact_id` and `global_pos`, not one `position` column,
+    because the read order of `ReadAll` is that pair.
+
 #### The read never skips an event
 
 `global_pos` comes from a sequence, and a sequence hands out its numbers before
