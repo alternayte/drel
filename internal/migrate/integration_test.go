@@ -21,6 +21,14 @@ import (
 
 func setupMigrateDB(t *testing.T) *pgxdriver.PgxDriver {
 	t.Helper()
+	drv, _ := setupMigrateDBWithDSN(t)
+	return drv
+}
+
+// setupMigrateDBWithDSN also returns the connection string, so a test can open
+// a second pool and model two processes rather than two goroutines.
+func setupMigrateDBWithDSN(t *testing.T) (*pgxdriver.PgxDriver, string) {
+	t.Helper()
 	ctx := context.Background()
 
 	container, err := tcpostgres.Run(ctx,
@@ -44,7 +52,7 @@ func setupMigrateDB(t *testing.T) *pgxdriver.PgxDriver {
 	require.NoError(t, err)
 	t.Cleanup(func() { drv.Close() })
 
-	return drv
+	return drv, connStr
 }
 
 func writeFiles(t *testing.T, dir, version, name, up, down string) {
@@ -341,4 +349,60 @@ func TestIntegration_Migrate_Roundtrip(t *testing.T) {
 	var c int
 	require.NoError(t, row.Scan(&c))
 	assert.Equal(t, 0, c)
+}
+
+// TestIntegration_Migrate_ConcurrentUp_ManyReplicas models a deployment where
+// several replicas boot at one time and every one of them runs Up. Each replica
+// holds its own connection pool, as a separate process does.
+//
+// CREATE TABLE IF NOT EXISTS is not race-safe on Postgres: two sessions can both
+// pass the existence check, and one then fails on the catalog index with
+// "duplicate key value violates unique constraint pg_type_typname_nsp_index".
+// The tracking table must therefore be created under the migration lock.
+//
+// Exactly one replica may apply the migration, and no replica may fail.
+func TestIntegration_Migrate_ConcurrentUp_ManyReplicas(t *testing.T) {
+	drv, dsn := setupMigrateDBWithDSN(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	writeFiles(t, dir, "20260510120000", "create_widgets",
+		"CREATE TABLE widgets (id SERIAL PRIMARY KEY, name TEXT NOT NULL);",
+		"DROP TABLE widgets;")
+
+	const replicas = 8
+	runners := make([]*migrate.Runner, replicas)
+	for i := range runners {
+		d, err := pgxdriver.New(ctx, dsn)
+		require.NoError(t, err)
+		t.Cleanup(func() { d.Close() })
+		runners[i] = migrate.NewRunner(d, dir, "postgres")
+	}
+
+	type res struct {
+		n   int
+		err error
+	}
+	ch := make(chan res, replicas)
+	start := make(chan struct{})
+	for _, r := range runners {
+		go func(r *migrate.Runner) {
+			<-start
+			n, err := r.Up(ctx)
+			ch <- res{n, err}
+		}(r)
+	}
+	close(start)
+
+	applied := 0
+	for i := 0; i < replicas; i++ {
+		got := <-ch
+		require.NoError(t, got.err, "a booting replica must not fail")
+		applied += got.n
+	}
+	assert.Equal(t, 1, applied, "exactly one replica may apply the migration")
+
+	var count int
+	require.NoError(t, drv.QueryRow(ctx, "SELECT count(*) FROM drel_migrations").Scan(&count))
+	assert.Equal(t, 1, count)
 }

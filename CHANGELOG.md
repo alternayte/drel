@@ -61,6 +61,18 @@ type Position struct{ XactID, GlobalPos int64 }
 On SQLite `xact_id` is always 0, because SQLite serialises writers and the
 insert order is already the commit order.
 
+### Fixed
+
+- **A booting replica could crash on the migration table.** `Up` and `Down`
+  created `drel_migrations` before they took the migration lock, and
+  `CREATE TABLE IF NOT EXISTS` is not race-safe on Postgres: two sessions both
+  pass the existence check, and the loser fails with
+  `duplicate key value violates unique constraint "pg_type_typname_nsp_index"`.
+  Several replicas that booted at one time could therefore fail to start. `Up`
+  and `Down` now take the lock first. The read-only paths cannot take the lock,
+  so they confirm the table is present and carry on. An integration test boots
+  eight replicas, each with its own pool, and it failed every run before the fix.
+
 ## [0.6.0] - 2026-09-08
 
 Host-integration release. It gives an application framework the pieces it needs
