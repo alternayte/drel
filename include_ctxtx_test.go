@@ -44,8 +44,20 @@ var uowTeamMeta = drel.ModelMeta[uowTeam]{
 		}
 		return nil
 	},
-	PKValue:       func(x *uowTeam) any { return x.ID },
-	ColumnValue:   func(x *uowTeam, i int) any { switch i { case 0: return x.ID; case 1: return x.Name; case 2: return x.CreatedAt; case 3: return x.UpdatedAt }; return nil },
+	PKValue: func(x *uowTeam) any { return x.ID },
+	ColumnValue: func(x *uowTeam, i int) any {
+		switch i {
+		case 0:
+			return x.ID
+		case 1:
+			return x.Name
+		case 2:
+			return x.CreatedAt
+		case 3:
+			return x.UpdatedAt
+		}
+		return nil
+	},
 	InsertColumns: func(x *uowTeam) ([]string, []any) { return []string{"name"}, []any{x.Name} },
 	ScanReturning: func(x *uowTeam, row drel.Row) error { return row.Scan(&x.ID, &x.CreatedAt, &x.UpdatedAt) },
 }
@@ -66,8 +78,22 @@ var uowMemberMeta = drel.ModelMeta[uowMember]{
 		}
 		return nil
 	},
-	PKValue:       func(x *uowMember) any { return x.ID },
-	ColumnValue:   func(x *uowMember, i int) any { switch i { case 0: return x.ID; case 1: return x.TeamID; case 2: return x.Nick; case 3: return x.CreatedAt; case 4: return x.UpdatedAt }; return nil },
+	PKValue: func(x *uowMember) any { return x.ID },
+	ColumnValue: func(x *uowMember, i int) any {
+		switch i {
+		case 0:
+			return x.ID
+		case 1:
+			return x.TeamID
+		case 2:
+			return x.Nick
+		case 3:
+			return x.CreatedAt
+		case 4:
+			return x.UpdatedAt
+		}
+		return nil
+	},
 	InsertColumns: func(x *uowMember) ([]string, []any) { return []string{"team_id", "nick"}, []any{x.TeamID, x.Nick} },
 	ScanReturning: func(x *uowMember, row drel.Row) error { return row.Scan(&x.ID, &x.CreatedAt, &x.UpdatedAt) },
 }

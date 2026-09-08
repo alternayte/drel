@@ -8,27 +8,27 @@ import (
 
 // ModelMeta describes the database mapping for a model type T.
 type ModelMeta[T any] struct {
-	Table          string
-	Columns        []string
-	PKColumn       string
-	Scan           func(Row) (*T, error)
-	Snapshot       func(*T) any
-	Diff           func(*T, any) []FieldChange
-	PKValue        func(*T) any
-	InsertColumns  func(*T) ([]string, []any)
-	ScanReturning  func(*T, Row) error
-	ScanGenerated  func(*T, Row) error // scans created_at, updated_at only (app-assigned)
-	KeyStrategy    KeyStrategy
-	GenerateKey    func() any
-	SetKey         func(*T, any)
-	KeyIsZero      func(*T) bool
-	ColumnValue func(*T, int) any
+	Table         string
+	Columns       []string
+	PKColumn      string
+	Scan          func(Row) (*T, error)
+	Snapshot      func(*T) any
+	Diff          func(*T, any) []FieldChange
+	PKValue       func(*T) any
+	InsertColumns func(*T) ([]string, []any)
+	ScanReturning func(*T, Row) error
+	ScanGenerated func(*T, Row) error // scans created_at, updated_at only (app-assigned)
+	KeyStrategy   KeyStrategy
+	GenerateKey   func() any
+	SetKey        func(*T, any)
+	KeyIsZero     func(*T) bool
+	ColumnValue   func(*T, int) any
 	// NormalizeKey converts a primary-key value scanned as a raw driver type
 	// (e.g. [16]byte/string for a UUID, int64 for an integer) into the canonical
 	// Go key type returned by PKValue, so pivot-table keys compare equal to it.
 	// Optional; when nil the loader falls back to int normalization.
-	NormalizeKey func(any) any
-	Filters      []NamedFilter
+	NormalizeKey   func(any) any
+	Filters        []NamedFilter
 	HasSoftDelete  bool
 	HasVersioned   bool
 	HasAudit       bool

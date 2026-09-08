@@ -121,8 +121,13 @@ var repChildMeta = drel.ModelMeta[repChild]{
 		c := &repChild{}
 		return c, row.Scan(&c.ID, &c.PID)
 	},
-	PKValue:     func(c *repChild) any { return c.ID },
-	ColumnValue: func(c *repChild, i int) any { if i == 1 { return c.PID }; return c.ID },
+	PKValue: func(c *repChild) any { return c.ID },
+	ColumnValue: func(c *repChild, i int) any {
+		if i == 1 {
+			return c.PID
+		}
+		return c.ID
+	},
 }
 
 var repChildrenRelation = &drel.RelationInfo{

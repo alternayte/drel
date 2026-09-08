@@ -30,12 +30,12 @@ func TestDetectDialect_LibSQL(t *testing.T) {
 func TestDetectDialect_SQLiteFilePaths(t *testing.T) {
 	cases := map[string]string{
 		// extension-based SQLite detection
-		"app.sqlite":           "sqlite",
-		"data.sqlite3":         "sqlite",
-		"/var/lib/app.sqlite":  "sqlite",
-		"./db/app.sqlite3":     "sqlite",
-		"app.db":               "sqlite", // existing behavior preserved
-		"file:app.sqlite":      "sqlite",
+		"app.sqlite":          "sqlite",
+		"data.sqlite3":        "sqlite",
+		"/var/lib/app.sqlite": "sqlite",
+		"./db/app.sqlite3":    "sqlite",
+		"app.db":              "sqlite", // existing behavior preserved
+		"file:app.sqlite":     "sqlite",
 		// bare path (no scheme, looks like a file) -> SQLite
 		"./var/app":            "sqlite",
 		"../data/store":        "sqlite",
@@ -59,11 +59,11 @@ func TestDetectDialect_SQLiteFilePaths(t *testing.T) {
 func TestWarnWSTransport_LogsForWSScheme(t *testing.T) {
 	cases := map[string]bool{
 		"ws://localhost:8080":  true,
-		"wss://db.turso.io":   true,
+		"wss://db.turso.io":    true,
 		"libsql://db.turso.io": false,
-		"https://db.turso.io": false,
-		"file:app.db":         false,
-		":memory:":            false,
+		"https://db.turso.io":  false,
+		"file:app.db":          false,
+		":memory:":             false,
 	}
 	for dsn, wantWarn := range cases {
 		var buf bytes.Buffer

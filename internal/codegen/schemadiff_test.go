@@ -434,11 +434,11 @@ func TestDiffSchemas_GrowStringEnum_Postgres(t *testing.T) {
 
 func TestDiffSchemas_ShrinkStringEnum_Postgres_Warns(t *testing.T) {
 	old := Schema{
-		Enums: []EnumDef{{Name: "role", Values: []string{"admin", "user", "guest"}, BaseType: "string"}},
+		Enums:  []EnumDef{{Name: "role", Values: []string{"admin", "user", "guest"}, BaseType: "string"}},
 		Tables: []Table{pgTable("users", Column{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true})},
 	}
 	newS := Schema{
-		Enums: []EnumDef{{Name: "role", Values: []string{"admin", "user"}, BaseType: "string"}},
+		Enums:  []EnumDef{{Name: "role", Values: []string{"admin", "user"}, BaseType: "string"}},
 		Tables: []Table{pgTable("users", Column{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true})},
 	}
 	up, _ := DiffSchemas(old, newS, "postgres")
@@ -582,5 +582,3 @@ func TestDiffSchemas_DropToEmpty_CoversPivotsAndEnums(t *testing.T) {
 
 	_ = down // down (recreate) is exercised by other tests
 }
-
-

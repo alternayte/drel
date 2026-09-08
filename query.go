@@ -17,14 +17,14 @@ var ErrConcurrencyConflict = errors.New("drel: concurrency conflict — entity w
 
 // QueryBuilder constructs and executes typed queries with an immutable builder pattern.
 type QueryBuilder[T any] struct {
-	engine  *Engine
-	meta    *ModelMeta[T]
-	wheres  []ast.WhereClause
-	orderBy []ast.OrderByExpr
-	limit   *int
-	offset  *int
-	after   *string
-	before  *string
+	engine   *Engine
+	meta     *ModelMeta[T]
+	wheres   []ast.WhereClause
+	orderBy  []ast.OrderByExpr
+	limit    *int
+	offset   *int
+	after    *string
+	before   *string
 	filters  []NamedFilter
 	primary  bool
 	distinct bool

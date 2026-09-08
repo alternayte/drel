@@ -33,7 +33,7 @@ func (d *recDriver) BeginTx(ctx context.Context, o driver.TxOptions) (driver.Tx,
 	d.record("begintx")
 	return nil, nil
 }
-func (d *recDriver) Close() {}
+func (d *recDriver) Close()                         {}
 func (d *recDriver) Ping(ctx context.Context) error { d.record("ping"); return nil }
 func (d *recDriver) Stat() driver.PoolStat          { d.record("stat"); return driver.PoolStat{} }
 

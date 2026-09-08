@@ -197,4 +197,3 @@ func TestBulkInsert_Versioned_InitializesVersionToOne(t *testing.T) {
 		t.Fatalf("expected in-memory version 1, got %d", p.Version())
 	}
 }
-

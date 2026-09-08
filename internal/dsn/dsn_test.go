@@ -13,16 +13,16 @@ func TestDetectDialect(t *testing.T) {
 	cases := map[string]string{
 		"libsql://mydb.turso.io":    "libsql",
 		"wss://mydb.turso.io":       "libsql",
-		"ws://localhost:8080":        "libsql",
-		"http://localhost:8080":      "libsql",
-		"https://mydb.turso.io":      "libsql",
-		"file:app.db":                "sqlite",
-		"sqlite://app.db":            "sqlite",
-		":memory:":                   "sqlite",
-		"data.db":                    "sqlite",
-		"postgres://u:p@host/db":     "postgres",
-		"postgresql://u:p@host/db":   "postgres",
-		"host=localhost user=admin":  "postgres",
+		"ws://localhost:8080":       "libsql",
+		"http://localhost:8080":     "libsql",
+		"https://mydb.turso.io":     "libsql",
+		"file:app.db":               "sqlite",
+		"sqlite://app.db":           "sqlite",
+		":memory:":                  "sqlite",
+		"data.db":                   "sqlite",
+		"postgres://u:p@host/db":    "postgres",
+		"postgresql://u:p@host/db":  "postgres",
+		"host=localhost user=admin": "postgres",
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, dsn.DetectDialect(in), "dsn=%s", in)

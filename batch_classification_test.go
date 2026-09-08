@@ -32,7 +32,7 @@ func (d *pipelineDriver) Query(ctx context.Context, sql string, args ...any) (dr
 func (d *pipelineDriver) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
 	return 0, nil
 }
-func (d *pipelineDriver) Begin(ctx context.Context) (driver.Tx, error)               { return nil, nil }
+func (d *pipelineDriver) Begin(ctx context.Context) (driver.Tx, error) { return nil, nil }
 func (d *pipelineDriver) BeginTx(ctx context.Context, o driver.TxOptions) (driver.Tx, error) {
 	return nil, nil
 }

@@ -53,9 +53,9 @@ func (d *fakeCopyDriver) Begin(ctx context.Context) (driver.Tx, error) { return 
 func (d *fakeCopyDriver) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	return d.tx, nil
 }
-func (d *fakeCopyDriver) Close()                           {}
-func (d *fakeCopyDriver) Ping(ctx context.Context) error   { return nil }
-func (d *fakeCopyDriver) Stat() driver.PoolStat            { return driver.PoolStat{} }
+func (d *fakeCopyDriver) Close()                         {}
+func (d *fakeCopyDriver) Ping(ctx context.Context) error { return nil }
+func (d *fakeCopyDriver) Stat() driver.PoolStat          { return driver.PoolStat{} }
 
 func TestBulkInsert_UsesCopyWhenTxSupportsIt(t *testing.T) {
 	ctx := context.Background()

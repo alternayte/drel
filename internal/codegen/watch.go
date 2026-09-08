@@ -202,4 +202,3 @@ func quickWatchDirs(configPath string) (skip map[string]bool, dirs []string, err
 	sort.Strings(dirs)
 	return skip, dirs, nil
 }
-

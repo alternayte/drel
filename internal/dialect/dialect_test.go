@@ -12,11 +12,11 @@ import (
 // AdvisoryLockSQL contract shape without depending on a concrete dialect.
 type fakeDialect struct{}
 
-func (fakeDialect) Name() string                         { return "fake" }
-func (fakeDialect) SupportsReturning() bool             { return false }
-func (fakeDialect) UsesQuestionPlaceholders() bool      { return false }
-func (fakeDialect) Now() string                         { return "" }
-func (fakeDialect) Explain(q string) (string, bool)     { return "", false }
+func (fakeDialect) Name() string                              { return "fake" }
+func (fakeDialect) SupportsReturning() bool                   { return false }
+func (fakeDialect) UsesQuestionPlaceholders() bool            { return false }
+func (fakeDialect) Now() string                               { return "" }
+func (fakeDialect) Explain(q string) (string, bool)           { return "", false }
 func (fakeDialect) BuildSelect(ast.SelectNode) dialect.Result { return dialect.Result{} }
 func (fakeDialect) BuildInsert(string, []string, []any, []string) dialect.Result {
 	return dialect.Result{}
@@ -39,8 +39,10 @@ func (fakeDialect) BuildBulkInsert(string, []string, [][]any) dialect.Result { r
 func (fakeDialect) BuildBulkUpdate(string, []dialect.ColumnValue, *ast.WhereClause) dialect.Result {
 	return dialect.Result{}
 }
-func (fakeDialect) BuildBulkDelete(string, *ast.WhereClause) dialect.Result     { return dialect.Result{} }
-func (fakeDialect) BuildBulkSoftDelete(string, *ast.WhereClause) dialect.Result { return dialect.Result{} }
+func (fakeDialect) BuildBulkDelete(string, *ast.WhereClause) dialect.Result { return dialect.Result{} }
+func (fakeDialect) BuildBulkSoftDelete(string, *ast.WhereClause) dialect.Result {
+	return dialect.Result{}
+}
 func (fakeDialect) BuildBulkUpsert(string, []string, [][]any, []string, []string, bool) dialect.Result {
 	return dialect.Result{}
 }

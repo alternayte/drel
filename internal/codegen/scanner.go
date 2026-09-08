@@ -428,7 +428,7 @@ func parseDBTag(rawTag string) (string, dbTagOpts, error) {
 func splitTagOptions(s string) []string {
 	var parts []string
 	var cur strings.Builder
-	depth := 0    // tracks nesting depth of ( ) and [ ]
+	depth := 0 // tracks nesting depth of ( ) and [ ]
 	inQuote := false
 	for i := 0; i < len(s); i++ {
 		c := s[i]
