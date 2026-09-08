@@ -38,16 +38,18 @@ func main() {
 
 	setup(ctx, database)
 
-	// === Insert via a UnitOfWork (DbContext-style change tracking) ===
-	uow := database.NewUnitOfWork()
-	for i := 1; i <= 12; i++ {
-		uow.Notes.Add(models.NewNote(
-			fmt.Sprintf("note-%02d", i),
-			fmt.Sprintf("Note %d", i),
-			[]string{"work", "home", "ideas"}[i%3],
-		))
-	}
-	if err := uow.SaveChanges(ctx); err != nil {
+	// === Insert inside a context transaction (change tracking) ===
+	if err := database.WithTx(ctx, func(ctx context.Context) error {
+		notes := database.Tx(ctx).Notes
+		for i := 1; i <= 12; i++ {
+			notes.Add(models.NewNote(
+				fmt.Sprintf("note-%02d", i),
+				fmt.Sprintf("Note %d", i),
+				[]string{"work", "home", "ideas"}[i%3],
+			))
+		}
+		return nil
+	}); err != nil {
 		log.Fatal(err)
 	}
 
@@ -83,14 +85,15 @@ func main() {
 		page++
 	}
 
-	// === Update with change tracking via a UnitOfWork ===
-	uow2 := database.NewUnitOfWork()
-	n, err := uow2.Notes.Find(ctx, 1) // tracked
-	if err != nil {
-		log.Fatal(err)
-	}
-	n.Pin() // only `pinned` is included in the UPDATE
-	if err := uow2.SaveChanges(ctx); err != nil {
+	// === Update with change tracking inside a context transaction ===
+	if err := database.WithTx(ctx, func(ctx context.Context) error {
+		n, err := database.Tx(ctx).Notes.Find(ctx, 1) // tracked
+		if err != nil {
+			return err
+		}
+		n.Pin() // only `pinned` is included in the UPDATE
+		return nil
+	}); err != nil {
 		log.Fatal(err)
 	}
 

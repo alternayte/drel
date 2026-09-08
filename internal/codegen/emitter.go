@@ -760,14 +760,6 @@ func emitTypedRepos(b *strings.Builder, m ModelInfo) {
 
 	b.WriteString(fmt.Sprintf("func (r *Tx%sRepository) FindByID(ctx context.Context, id %s) (*%s, error) {\n", m.Name, pkType, m.Name))
 	b.WriteString("\treturn r.Find(ctx, id)\n")
-	b.WriteString("}\n\n")
-
-	b.WriteString(fmt.Sprintf("type UoW%sRepository struct {\n", m.Name))
-	b.WriteString(fmt.Sprintf("\t*drel.UoWRepository[%s]\n", m.Name))
-	b.WriteString("}\n\n")
-
-	b.WriteString(fmt.Sprintf("func (r *UoW%sRepository) FindByID(ctx context.Context, id %s) (*%s, error) {\n", m.Name, pkType, m.Name))
-	b.WriteString("\treturn r.Find(ctx, id)\n")
 	b.WriteString("}\n")
 }
 

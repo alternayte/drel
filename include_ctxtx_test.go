@@ -110,25 +110,26 @@ func setupUoWIncludeEngine(t *testing.T) *drel.Engine {
 	return engine
 }
 
-func TestUoWInclude_EditedChildIsPersisted(t *testing.T) {
+func TestCtxTxInclude_EditedChildIsPersisted(t *testing.T) {
 	engine := setupUoWIncludeEngine(t)
 	ctx := context.Background()
 
-	uow := engine.NewUnitOfWork()
-	teams := drel.NewUoWRepository(uow, uowTeamMeta)
+	var childID int
+	require.NoError(t, engine.WithTx(ctx, func(ctx context.Context) error {
+		teams := drel.NewTxRepository(drel.MustFromContext(ctx), uowTeamMeta)
 
-	team, err := teams.Include(membersRel()).Find(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, team.Members, 1)
+		team, err := teams.Include(membersRel()).Find(ctx, 1)
+		require.NoError(t, err)
+		require.Len(t, team.Members, 1)
 
-	// Edit a field on the INCLUDE'd child.
-	team.Members[0].Nick = "new-nick"
-
-	require.NoError(t, uow.SaveChanges(ctx))
+		// Edit a field on the INCLUDE'd child.
+		team.Members[0].Nick = "new-nick"
+		childID = team.Members[0].ID
+		return nil
+	}))
 
 	// Re-read on a fresh repo to confirm the edit was flushed.
-	memberRepo := drel.NewRepository(engine, uowMemberMeta)
-	reread, err := memberRepo.Find(ctx, team.Members[0].ID)
+	reread, err := drel.NewRepository(engine, uowMemberMeta).Find(ctx, childID)
 	require.NoError(t, err)
-	assert.Equal(t, "new-nick", reread.Nick, "edited Include'd child must be persisted by SaveChanges")
+	assert.Equal(t, "new-nick", reread.Nick, "an edited Include'd child must be persisted by the commit")
 }

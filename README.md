@@ -50,10 +50,11 @@ helpers, and a `DB` struct that aggregates all discovered models.
 // Open the generated DB
 database, err := db.Open(dsn)
 
-// Insert via a UnitOfWork (change-tracking work session)
-uow := database.NewUnitOfWork()
-uow.Tasks.Add(models.NewTask("Build ORM", 1))
-err = uow.SaveChanges(ctx)
+// Insert inside a transaction that travels through the context
+err = database.WithTx(ctx, func(ctx context.Context) error {
+    database.Tx(ctx).Tasks.Add(models.NewTask("Build ORM", 1))
+    return nil
+})
 
 // Query with generated type-safe columns (read-only, untracked)
 tasks, err := database.Tasks.
@@ -62,12 +63,17 @@ tasks, err := database.Tasks.
     All(ctx)
 
 // Update with change tracking (only modified columns are UPDATEd)
-uow = database.NewUnitOfWork()
-task, err := uow.Tasks.Find(ctx, 1) // tracked
-if err == nil {
+err = database.WithTx(ctx, func(ctx context.Context) error {
+    task, err := database.Tx(ctx).Tasks.Find(ctx, 1) // tracked
+    if err != nil {
+        return err
+    }
     task.MarkDone()
-    err = uow.SaveChanges(ctx)
-}
+    return nil
+})
+
+// A nested WithTx call joins the same transaction through a savepoint.
+// Reach the transaction anywhere with drel.MustFromContext(ctx).
 
 // Or an explicit multi-statement transaction:
 err = database.Transaction(ctx, func(tx *drel.Tx) error {
@@ -101,7 +107,7 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   (`Tx.AdvisoryLock` / `TryAdvisoryLock`; a SQLite no-op), automatic retry on
   serialization failures (`TransactionWithRetry` / `WithRetry`), and automatic
   flush on commit. Projections, includes, bulk operations, and batching all run
-  on the transaction's own connection inside an explicit `Tx` or `UnitOfWork`.
+  on the transaction's own connection inside an explicit `Tx`.
 - **Soft delete, versioning, audit** -- embed `drel.SoftDelete`,
   `drel.Versioned`, or `drel.Audit` for automatic column management.
 - **Primary keys** -- integer auto-increment by default, or application-assigned

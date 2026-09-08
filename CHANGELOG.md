@@ -5,6 +5,53 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **Transaction propagation through the context.** `Engine.WithTx(ctx, fn)`
+  opens a transaction, puts it in the context it passes to `fn`, and commits
+  when `fn` returns nil. `drel.FromContext(ctx)` returns the transaction.
+  `drel.MustFromContext(ctx)` returns it and panics when it is absent, so a
+  wiring fault fails at once. A nested `WithTx` call on the same engine reuses
+  the transaction and opens a savepoint. It does not begin a second
+  transaction, and it does not commit. A nested call that carries transaction
+  options returns `drel.ErrNestedTxOptions`. The behaviour is the same for
+  Postgres, SQLite and LibSQL.
+- Generated code gains `db.WithTx(ctx, fn, opts...)`, the `TxRepos` struct, and
+  `db.Tx(ctx)`, which returns the tracked repositories bound to the transaction
+  in the context.
+
+### Removed
+
+**Breaking.** The connectionless `UnitOfWork` is deleted. `Engine.NewUnitOfWork`,
+`drel.UnitOfWork`, `drel.UoWRepository`, `drel.NewUoWRepository`, the generated
+`UnitOfWork` struct, the generated `db.NewUnitOfWork` and the generated
+`UoW<Model>Repository` types are all gone.
+
+`UnitOfWork` held no connection. `SaveChanges` opened its own short transaction
+and committed it, so a caller could not write an application row and a control
+row (an outbox entry, an inbox dedupe row, a projection checkpoint) in one
+transaction. `Tx` holds the connection, so the context now carries `*Tx`.
+
+Migration:
+
+```go
+// before
+uow := database.NewUnitOfWork()
+uow.Users.Add(u)
+err := uow.SaveChanges(ctx)
+
+// after
+err := database.WithTx(ctx, func(ctx context.Context) error {
+    database.Tx(ctx).Users.Add(u)
+    return nil
+})
+```
+
+The flush is automatic at commit. Call `drel.MustFromContext(ctx).SaveChanges(ctx)`
+only when later work in the same transaction needs the generated ids.
+
 ## [0.5.0] - 2026-06-15
 
 Production-readiness release. A broad pass over correctness, feature

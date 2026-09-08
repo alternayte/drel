@@ -139,11 +139,3 @@ type TxOrderRepository struct {
 func (r *TxOrderRepository) FindByID(ctx context.Context, id uuid.UUID) (*Order, error) {
 	return r.Find(ctx, id)
 }
-
-type UoWOrderRepository struct {
-	*drel.UoWRepository[Order]
-}
-
-func (r *UoWOrderRepository) FindByID(ctx context.Context, id uuid.UUID) (*Order, error) {
-	return r.Find(ctx, id)
-}

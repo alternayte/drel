@@ -91,3 +91,40 @@ func TestEmitDBFile_ManyToManyRelation(t *testing.T) {
 	assert.Contains(t, out, "drel.ToMetaBase(&tags.TagMeta)")
 	assert.Contains(t, out, "var AuthorIncludeTags = drel.NewIncludeSpec(&AuthorTagsRel)")
 }
+
+// TestEmitDBFile_ContextTransaction covers the context transaction surface: the
+// TxRepos struct, the Tx accessor and the WithTx forwarder. It also proves that
+// the deleted UnitOfWork surface is gone.
+func TestEmitDBFile_ContextTransaction(t *testing.T) {
+	models := []ModelInfo{
+		{
+			Name: "User", PkgPath: "app/features/users", PkgName: "users",
+			PKType: "int", TableName: "users",
+			Fields: []FieldInfo{{Name: "name", GoType: "string", ColumnName: "name"}},
+		},
+		{
+			Name: "Post", PkgPath: "app/features/posts", PkgName: "posts",
+			PKType: "int", TableName: "posts",
+			Fields: []FieldInfo{{Name: "title", GoType: "string", ColumnName: "title"}},
+		},
+	}
+
+	out := EmitDBFile(models, "db")
+
+	assert.Contains(t, out, `"context"`)
+
+	assert.Contains(t, out, "type TxRepos struct {")
+	assert.Contains(t, out, "Users *users.TxUserRepository")
+	assert.Contains(t, out, "Posts *posts.TxPostRepository")
+
+	assert.Contains(t, out, "func (db *DB) Tx(ctx context.Context) TxRepos {")
+	assert.Contains(t, out, "tx := drel.MustFromContext(ctx)")
+	assert.Contains(t, out, "&users.TxUserRepository{TxRepository: drel.NewTxRepository(tx, users.UserMeta)}")
+	assert.Contains(t, out, "&posts.TxPostRepository{TxRepository: drel.NewTxRepository(tx, posts.PostMeta)}")
+
+	assert.Contains(t, out, "func (db *DB) WithTx(ctx context.Context, fn func(ctx context.Context) error, opts ...drel.TxOption) error {")
+	assert.Contains(t, out, "return db.Engine.WithTx(ctx, fn, opts...)")
+
+	assert.NotContains(t, out, "UnitOfWork")
+	assert.NotContains(t, out, "UoW")
+}

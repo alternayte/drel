@@ -166,11 +166,3 @@ type TxArticleRepository struct {
 func (r *TxArticleRepository) FindByID(ctx context.Context, id int) (*Article, error) {
 	return r.Find(ctx, id)
 }
-
-type UoWArticleRepository struct {
-	*drel.UoWRepository[Article]
-}
-
-func (r *UoWArticleRepository) FindByID(ctx context.Context, id int) (*Article, error) {
-	return r.Find(ctx, id)
-}

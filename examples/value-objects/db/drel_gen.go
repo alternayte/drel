@@ -3,6 +3,8 @@
 package db
 
 import (
+	"context"
+
 	"github.com/alternayte/drel"
 	accounts "github.com/alternayte/drel/examples/value-objects/accounts"
 	models "github.com/alternayte/drel/examples/value-objects/models"
@@ -26,21 +28,26 @@ func Open(dsn string, opts ...drel.Option) (*DB, error) {
 	}, nil
 }
 
-// UnitOfWork is a change-tracking work session with typed, tracked
-// repositories. Load through uow.<Model>, stage with Add/Remove, then
-// SaveChanges to flush everything in a single transaction.
-type UnitOfWork struct {
-	*drel.UnitOfWork
-	Accounts     *accounts.UoWAccountRepository
-	UserAccounts *models.UoWUserAccountRepository
+// TxRepos holds the tracked repositories of one transaction. Load through
+// the fields, stage with Add and Remove, then let WithTx commit.
+type TxRepos struct {
+	Accounts     *accounts.TxAccountRepository
+	UserAccounts *models.TxUserAccountRepository
 }
 
-// NewUnitOfWork starts a new change-tracking work session.
-func (db *DB) NewUnitOfWork() *UnitOfWork {
-	uow := db.Engine.NewUnitOfWork()
-	return &UnitOfWork{
-		UnitOfWork:   uow,
-		Accounts:     &accounts.UoWAccountRepository{UoWRepository: drel.NewUoWRepository(uow, accounts.AccountMeta)},
-		UserAccounts: &models.UoWUserAccountRepository{UoWRepository: drel.NewUoWRepository(uow, models.UserAccountMeta)},
+// Tx returns the tracked repositories bound to the transaction in ctx.
+// It panics if no transaction is present, so wrap the call in WithTx.
+func (db *DB) Tx(ctx context.Context) TxRepos {
+	tx := drel.MustFromContext(ctx)
+	return TxRepos{
+		Accounts:     &accounts.TxAccountRepository{TxRepository: drel.NewTxRepository(tx, accounts.AccountMeta)},
+		UserAccounts: &models.TxUserAccountRepository{TxRepository: drel.NewTxRepository(tx, models.UserAccountMeta)},
 	}
+}
+
+// WithTx runs fn inside a transaction and puts that transaction in the
+// context it passes to fn. Reach the tracked repositories with db.Tx(ctx).
+// A nested call opens a savepoint on the same transaction.
+func (db *DB) WithTx(ctx context.Context, fn func(ctx context.Context) error, opts ...drel.TxOption) error {
+	return db.Engine.WithTx(ctx, fn, opts...)
 }

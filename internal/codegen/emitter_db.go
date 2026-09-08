@@ -20,6 +20,7 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 
 	// Imports
 	b.WriteString("import (\n")
+	b.WriteString("\t\"context\"\n\n")
 	b.WriteString("\t\"github.com/alternayte/drel\"\n")
 	seen := make(map[string]bool)
 	for _, m := range models {
@@ -55,31 +56,38 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 	b.WriteString("\t}, nil\n")
 	b.WriteString("}\n\n")
 
-	// UnitOfWork struct with typed tracked repositories.
-	b.WriteString("// UnitOfWork is a change-tracking work session with typed, tracked\n")
-	b.WriteString("// repositories. Load through uow.<Model>, stage with Add/Remove, then\n")
-	b.WriteString("// SaveChanges to flush everything in a single transaction.\n")
-	b.WriteString("type UnitOfWork struct {\n")
-	b.WriteString("\t*drel.UnitOfWork\n")
+	// TxRepos: the typed tracked repositories bound to the transaction that
+	// WithTx put in the context.
+	b.WriteString("// TxRepos holds the tracked repositories of one transaction. Load through\n")
+	b.WriteString("// the fields, stage with Add and Remove, then let WithTx commit.\n")
+	b.WriteString("type TxRepos struct {\n")
 	for _, m := range models {
 		alias := aliases[m.PkgPath]
 		fieldName := pluralize(m.Name)
-		b.WriteString(fmt.Sprintf("\t%s *%s.UoW%sRepository\n", fieldName, alias, m.Name))
+		b.WriteString(fmt.Sprintf("\t%s *%s.Tx%sRepository\n", fieldName, alias, m.Name))
 	}
 	b.WriteString("}\n\n")
 
-	// NewUnitOfWork constructor.
-	b.WriteString("// NewUnitOfWork starts a new change-tracking work session.\n")
-	b.WriteString("func (db *DB) NewUnitOfWork() *UnitOfWork {\n")
-	b.WriteString("\tuow := db.Engine.NewUnitOfWork()\n")
-	b.WriteString("\treturn &UnitOfWork{\n")
-	b.WriteString("\t\tUnitOfWork: uow,\n")
+	// Tx accessor.
+	b.WriteString("// Tx returns the tracked repositories bound to the transaction in ctx.\n")
+	b.WriteString("// It panics if no transaction is present, so wrap the call in WithTx.\n")
+	b.WriteString("func (db *DB) Tx(ctx context.Context) TxRepos {\n")
+	b.WriteString("\ttx := drel.MustFromContext(ctx)\n")
+	b.WriteString("\treturn TxRepos{\n")
 	for _, m := range models {
 		alias := aliases[m.PkgPath]
 		fieldName := pluralize(m.Name)
-		b.WriteString(fmt.Sprintf("\t\t%s: &%s.UoW%sRepository{UoWRepository: drel.NewUoWRepository(uow, %s.%sMeta)},\n", fieldName, alias, m.Name, alias, m.Name))
+		b.WriteString(fmt.Sprintf("\t\t%s: &%s.Tx%sRepository{TxRepository: drel.NewTxRepository(tx, %s.%sMeta)},\n", fieldName, alias, m.Name, alias, m.Name))
 	}
 	b.WriteString("\t}\n")
+	b.WriteString("}\n\n")
+
+	// WithTx forwarder.
+	b.WriteString("// WithTx runs fn inside a transaction and puts that transaction in the\n")
+	b.WriteString("// context it passes to fn. Reach the tracked repositories with db.Tx(ctx).\n")
+	b.WriteString("// A nested call opens a savepoint on the same transaction.\n")
+	b.WriteString("func (db *DB) WithTx(ctx context.Context, fn func(ctx context.Context) error, opts ...drel.TxOption) error {\n")
+	b.WriteString("\treturn db.Engine.WithTx(ctx, fn, opts...)\n")
 	b.WriteString("}\n")
 
 	// Emit RelationInfo and IncludeSpec vars for all relationships.

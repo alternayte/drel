@@ -14,7 +14,7 @@ Code-generation-based Go ORM targeting Postgres and SQLite/LibSQL (Turso). Deliv
 
 ```
 CLI (cmd/drel)           Runtime library (drel package)
-  ├── model scanner        ├── Engine / UnitOfWork
+  ├── model scanner        ├── Engine / Tx (context)
   ├── codegen emitter      ├── Repository[T]
   └── migration gen        ├── Query builder → AST → Dialect emitter
       (Atlas)              │     ├── Postgres (pgx)
@@ -48,7 +48,7 @@ docs/
 - **Value objects** implement `drel.ColumnMapper` (single column) or `drel.MultiColumnMapper` (multi-column). Validation lives in constructors.
 - **Enums** are Go `string` or `int` types with `const` values. Codegen discovers them and generates DB constraints.
 - **ModelMeta[T]** — each model registers a metadata struct with scan/snapshot/diff functions. `Repository[T]` uses these; no reflection needed.
-- **UnitOfWork pattern** — `db.NewUnitOfWork()` creates a tracked context. `uow.Users.Find()` = tracked; `db.Users.All()` = untracked read-only.
+- **Context transaction** — `db.WithTx(ctx, fn)` opens a transaction and puts it in the context. `db.Tx(ctx).Users.Find()` = tracked; `db.Users.All()` = untracked read-only. A nested `WithTx` call uses a savepoint.
 
 ## Commands
 

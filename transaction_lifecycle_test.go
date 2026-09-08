@@ -37,23 +37,6 @@ func TestTransaction_RollbackRunsWithCancelledContext(t *testing.T) {
 	assert.Equal(t, 0, n, "rollback must run even when caller ctx is cancelled")
 }
 
-func TestUnitOfWork_RollbackRunsWithCancelledContext(t *testing.T) {
-	engine := setupSQLiteEngine(t)
-	ctx, cancel := context.WithCancel(context.Background())
-
-	uow := engine.NewUnitOfWork()
-	drel.NewUoWRepository(uow, sqliteItemMeta).Add(&sqliteItem{Title: "ghost"})
-
-	// Cancel before SaveChanges so begin succeeds but the flush/commit path
-	// observes a dead ctx; rollback must still clean up.
-	cancel()
-	err := uow.SaveChanges(ctx)
-	require.Error(t, err)
-
-	n := countItems(t, engine)
-	assert.Equal(t, 0, n, "uow rollback must run even when caller ctx is cancelled")
-}
-
 func TestTransaction_FailsFastOnCancelledContext(t *testing.T) {
 	engine := setupSQLiteEngine(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -66,17 +49,6 @@ func TestTransaction_FailsFastOnCancelledContext(t *testing.T) {
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, called, "fn must not run when ctx is already cancelled")
-}
-
-func TestUnitOfWork_FailsFastOnCancelledContext(t *testing.T) {
-	engine := setupSQLiteEngine(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	uow := engine.NewUnitOfWork()
-	drel.NewUoWRepository(uow, sqliteItemMeta).Add(&sqliteItem{Title: "x"})
-	err := uow.SaveChanges(ctx)
-	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestTransaction_WithReadOnly_AllowsReads(t *testing.T) {

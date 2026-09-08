@@ -3,6 +3,8 @@
 package db
 
 import (
+	"context"
+
 	"github.com/alternayte/drel"
 	orders "github.com/alternayte/drel/examples/uuid-keys/orders"
 )
@@ -23,19 +25,24 @@ func Open(dsn string, opts ...drel.Option) (*DB, error) {
 	}, nil
 }
 
-// UnitOfWork is a change-tracking work session with typed, tracked
-// repositories. Load through uow.<Model>, stage with Add/Remove, then
-// SaveChanges to flush everything in a single transaction.
-type UnitOfWork struct {
-	*drel.UnitOfWork
-	Orders *orders.UoWOrderRepository
+// TxRepos holds the tracked repositories of one transaction. Load through
+// the fields, stage with Add and Remove, then let WithTx commit.
+type TxRepos struct {
+	Orders *orders.TxOrderRepository
 }
 
-// NewUnitOfWork starts a new change-tracking work session.
-func (db *DB) NewUnitOfWork() *UnitOfWork {
-	uow := db.Engine.NewUnitOfWork()
-	return &UnitOfWork{
-		UnitOfWork: uow,
-		Orders:     &orders.UoWOrderRepository{UoWRepository: drel.NewUoWRepository(uow, orders.OrderMeta)},
+// Tx returns the tracked repositories bound to the transaction in ctx.
+// It panics if no transaction is present, so wrap the call in WithTx.
+func (db *DB) Tx(ctx context.Context) TxRepos {
+	tx := drel.MustFromContext(ctx)
+	return TxRepos{
+		Orders: &orders.TxOrderRepository{TxRepository: drel.NewTxRepository(tx, orders.OrderMeta)},
 	}
+}
+
+// WithTx runs fn inside a transaction and puts that transaction in the
+// context it passes to fn. Reach the tracked repositories with db.Tx(ctx).
+// A nested call opens a savepoint on the same transaction.
+func (db *DB) WithTx(ctx context.Context, fn func(ctx context.Context) error, opts ...drel.TxOption) error {
+	return db.Engine.WithTx(ctx, fn, opts...)
 }

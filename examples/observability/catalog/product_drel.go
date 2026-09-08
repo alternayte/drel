@@ -115,11 +115,3 @@ type TxProductRepository struct {
 func (r *TxProductRepository) FindByID(ctx context.Context, id int) (*Product, error) {
 	return r.Find(ctx, id)
 }
-
-type UoWProductRepository struct {
-	*drel.UoWRepository[Product]
-}
-
-func (r *UoWProductRepository) FindByID(ctx context.Context, id int) (*Product, error) {
-	return r.Find(ctx, id)
-}

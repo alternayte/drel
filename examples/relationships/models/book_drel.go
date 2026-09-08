@@ -115,11 +115,3 @@ type TxBookRepository struct {
 func (r *TxBookRepository) FindByID(ctx context.Context, id int) (*Book, error) {
 	return r.Find(ctx, id)
 }
-
-type UoWBookRepository struct {
-	*drel.UoWRepository[Book]
-}
-
-func (r *UoWBookRepository) FindByID(ctx context.Context, id int) (*Book, error) {
-	return r.Find(ctx, id)
-}

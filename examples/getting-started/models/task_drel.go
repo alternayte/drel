@@ -123,11 +123,3 @@ type TxTaskRepository struct {
 func (r *TxTaskRepository) FindByID(ctx context.Context, id int) (*Task, error) {
 	return r.Find(ctx, id)
 }
-
-type UoWTaskRepository struct {
-	*drel.UoWRepository[Task]
-}
-
-func (r *UoWTaskRepository) FindByID(ctx context.Context, id int) (*Task, error) {
-	return r.Find(ctx, id)
-}
