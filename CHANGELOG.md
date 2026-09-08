@@ -5,7 +5,12 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-08
+
+Host-integration release. It gives an application framework the pieces it needs
+to own a request transaction: the transaction travels in the context, the outbox
+has a relay that more than one replica can run, the inbox suppresses a duplicate
+delivery, and one test runs in one transaction.
 
 ### Added
 
@@ -362,9 +367,10 @@ Initial release: Postgres (pgx) core, code generation (model scanning, query
 builders, scan/snapshot/diff), basic CRUD, snapshot-based change tracking,
 implicit transactions, and the type-safe query builder.
 
-[0.5.0]: https://github.com/alternayte/drel-go/releases/tag/v0.5.0
-[0.4.0]: https://github.com/alternayte/drel-go/releases/tag/v0.4.0
-[0.3.2]: https://github.com/alternayte/drel-go/releases/tag/v0.3.2
-[0.3.1]: https://github.com/alternayte/drel-go/releases/tag/v0.3.1
-[0.3.0]: https://github.com/alternayte/drel-go/releases/tag/v0.3.0
-[0.1.0]: https://github.com/alternayte/drel-go/releases/tag/v0.1.0
+[0.6.0]: https://github.com/alternayte/drel/releases/tag/v0.6.0
+[0.5.0]: https://github.com/alternayte/drel/releases/tag/v0.5.0
+[0.4.0]: https://github.com/alternayte/drel/releases/tag/v0.4.0
+[0.3.2]: https://github.com/alternayte/drel/releases/tag/v0.3.2
+[0.3.1]: https://github.com/alternayte/drel/releases/tag/v0.3.1
+[0.3.0]: https://github.com/alternayte/drel/releases/tag/v0.3.0
+[0.1.0]: https://github.com/alternayte/drel/releases/tag/v0.1.0

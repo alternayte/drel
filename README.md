@@ -12,6 +12,12 @@ EF Core-level developer experience.
 go install github.com/alternayte/drel/cmd/drel@latest
 ```
 
+## Install
+
+```bash
+go get github.com/alternayte/drel
+```
+
 ## Quick Start
 
 ### 1. Define a model
