@@ -129,6 +129,9 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   batch under a lease, so more than one replica can poll one table, and it
   keeps the messages of one `PartitionKey` in order. A failed message retries,
   and it moves to the dead-letter state after the attempt limit.
+- **Inbox** -- `drel.NewInbox` suppresses a duplicate delivery. `Claim` writes
+  the dedupe row in the same transaction as the application write, so the two
+  commit together. The key is the pair of message ID and handler name.
 - **Pagination** -- offset (`PageOffset`) and keyset/cursor (`Page`) paging
   with a deterministic primary-key tiebreaker.
 - **Projections & aggregations** -- `Select`, `Aggregate`, `GroupBy` into

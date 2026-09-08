@@ -47,6 +47,23 @@ minor versions may contain breaking changes.
   `claimed_until`, `attempts`, `last_error`, `dead_at`) and the partition lease
   table `<outbox>_partitions`.
 
+- **Inbox** (`drel.NewInbox`, `drel.InboxSchema`). A broker delivers at least
+  once, so one message can reach a handler more than one time. `Inbox.Claim`
+  writes the dedupe row inside the transaction that `WithTx` put in the context,
+  next to the application write, so the two commit together or neither commits.
+  - The key is the pair of message ID and handler name. Two handlers can process
+    one message. One handler cannot process one message two times.
+  - `Claim` returns `drel.ErrDuplicateMessage` when the handler already processed
+    the message. It panics when the context carries no transaction, because a
+    dedupe row outside the application transaction gives no protection.
+  - A failed handler rolls the transaction back, and the dedupe row goes with it.
+    `Inbox.Fail` then records the attempt and the error outside the transaction.
+    A late failure cannot reopen a message that already succeeded.
+  - `Inbox.Purge` deletes the rows received before a time. Purge only beyond the
+    retention of the broker.
+  - The table carries a `processed_at` column that the design document did not
+    list. Without it a failure record would block every retry of its own message.
+
 ### Changed
 
 **Breaking.** `OutboxSchema` emits a wider table and a second table. An existing
