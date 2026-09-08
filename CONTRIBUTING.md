@@ -42,6 +42,12 @@ Integration tests are gated behind the `integration` build tag, so the default
 paths** — several real bugs (e.g. int64/int mismatches) only surface against a
 real database.
 
+The root integration suite shares one Postgres container. `setupTestDB` creates
+a fresh, empty database on that container for each test, so every test still
+starts from an empty schema and from sequence 1. The container starts on the
+first test that needs it, and `TestMain` stops it at the end. Do not start a
+container in a new test — call `setupTestDB` or `newTestEngine`.
+
 ## Code generation
 
 drel generates per-model code and an aggregated `DB` struct. After changing the
