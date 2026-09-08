@@ -5,6 +5,51 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **Event store** (`drel/es`). An append-only log that shares the engine and the
+  transaction of the application, so a stream and an aggregate commit together.
+  - `Store.Append(ctx, stream, expectedVersion, events)` writes the events at
+    `expectedVersion+1` and up, inside the transaction in the context. The
+    primary key is the pair of stream and version, so a duplicate version raises
+    a unique violation and `Append` returns `es.ErrConcurrency`. Optimistic
+    concurrency therefore costs no extra read.
+  - `AppendWithMetadata` stamps every event of the append with the same
+    metadata, for example the correlation ID and the acting user.
+  - `Store.Read(ctx, stream, fromVersion)` rebuilds one aggregate.
+    `Store.ReadAll(ctx, from, limit)` walks the whole log.
+  - A read uses the transaction in the context when one is present, so a caller
+    reads its own writes.
+  - `Append` panics without a transaction, as `Inbox.Claim` does.
+  - `es.Schema` emits the DDL for Postgres and for SQLite.
+- `drel.EventTypeName` is exported. The outbox and the event store name an event
+  the same way, so one event carries one name everywhere.
+
+#### The read never skips an event
+
+`global_pos` comes from a sequence, and a sequence hands out its numbers before
+the commit. A transaction that starts first can commit last, so a reader that
+ordered by `global_pos` alone would pass a later event, advance its checkpoint,
+and lose the earlier one for good.
+
+Each row therefore stores the transaction ID of its append, and `ReadAll`
+returns only the rows below `pg_snapshot_xmin`. Nothing that is still open can
+insert behind the reader. A long write transaction delays the reader by that
+much, which is the price of never losing an event. An integration test holds a
+transaction open and proves both halves.
+
+The read order is the pair of transaction ID and global position, so a position
+is a pair as well:
+
+```go
+type Position struct{ XactID, GlobalPos int64 }
+```
+
+On SQLite `xact_id` is always 0, because SQLite serialises writers and the
+insert order is already the commit order.
+
 ## [0.6.0] - 2026-09-08
 
 Host-integration release. It gives an application framework the pieces it needs
