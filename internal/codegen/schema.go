@@ -147,8 +147,11 @@ func columnDefSQL(c Column, dialect string) string {
 	// A single-column PK's type string already embeds "PRIMARY KEY" (and NOT
 	// NULL semantics), so do not append a redundant NOT NULL for it. A
 	// composite key column's type does not embed "PRIMARY KEY" (the key is
-	// declared at table level instead), so it still needs an explicit NOT NULL.
-	if c.NotNull && !strings.Contains(c.Type, "PRIMARY KEY") {
+	// declared at table level instead), so it still needs an explicit NOT
+	// NULL. The c.PK guard keeps a non-PK column with an author TypeOverride
+	// that happens to contain the substring "PRIMARY KEY" from losing its
+	// NOT NULL.
+	if c.NotNull && !(c.PK && strings.Contains(c.Type, "PRIMARY KEY")) {
 		b.WriteString(" NOT NULL")
 	}
 	if c.Check != "" && dialect == "sqlite" {

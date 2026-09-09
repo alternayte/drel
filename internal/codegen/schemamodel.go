@@ -15,9 +15,11 @@ type Schema struct {
 }
 
 // Table describes a single relation (table or pivot) and its columns/indexes.
-// PrimaryKey, when non-empty, declares a composite (table-level) primary key
-// used by many-to-many pivot tables; for regular tables the primary key is the
-// single column whose PK field is true.
+// PrimaryKey, when non-empty, declares a table-level composite primary key:
+// used by many-to-many pivot tables, and by a model with a multi-field struct
+// key. A model with a single key column (scalar or single-field struct key)
+// leaves PrimaryKey empty and instead declares the key inline on that
+// column, via its PK field and a type string embedding "PRIMARY KEY".
 type Table struct {
 	Name       string   `json:"name"`
 	Columns    []Column `json:"columns"`
@@ -120,6 +122,22 @@ func buildEnums(models []ModelInfo) []EnumDef {
 	return enums
 }
 
+// keyColumnBaseSQLType resolves a key column's plain SQL type, with no
+// "PRIMARY KEY" suffix. It prefers UnderlyingGoType — the scanner's
+// normalization kind ("int", "string", or "uuid.UUID") — over GoType, which
+// is only the bare local type name (for example "UUID" or a named type such
+// as "TenantID") and is not recognized by GoTypeToSQL, silently defaulting
+// to "text". It falls back to GoType only when UnderlyingGoType is unset,
+// which happens solely via buildTable's empty-Key fallback for hand-built
+// ModelInfo values in tests, where GoType is already a plain builtin name.
+func keyColumnBaseSQLType(kc KeyColumn, dialect string) string {
+	t := kc.UnderlyingGoType
+	if t == "" {
+		t = kc.GoType
+	}
+	return GoTypeToSQL(t, dialect)
+}
+
 // buildTable builds the structured Table for a single model, including PK,
 // user columns, trait columns, and indexes derived from db tag options.
 func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
@@ -135,13 +153,14 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 	t.RenamedFrom = m.RenamedFrom
 
 	// Primary key columns. A single key column carries "PRIMARY KEY" inline, and
-	// keeps auto-increment for integer keys. A composite key declares the key at
-	// table level instead, and never auto-increments.
+	// keeps auto-increment for a scalar integer key. A composite key declares
+	// the key at table level instead, and never auto-increments; neither does
+	// a single-field struct key, which is always application-assigned.
 	if m.IsCompositeKey() {
 		for _, kc := range m.Key {
 			t.Columns = append(t.Columns, Column{
 				Name:    kc.ColumnName,
-				Type:    GoTypeToSQL(kc.GoType, dialect),
+				Type:    keyColumnBaseSQLType(kc, dialect),
 				NotNull: true,
 				PK:      true,
 			})
@@ -150,14 +169,21 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 	} else {
 		kc := m.Key[0]
 		pk := Column{Name: kc.ColumnName, PK: true, NotNull: true}
-		if dialect == "sqlite" {
+		switch {
+		case m.KeyIsStruct:
+			// m.PKType is the struct's own type name here (e.g. "OrderLineKey"),
+			// not a scalar kind, so it cannot drive the switches below. Derive
+			// the type from the field's underlying kind instead, and never
+			// auto-increment: a struct key is always application-assigned.
+			pk.Type = keyColumnBaseSQLType(kc, dialect) + " PRIMARY KEY"
+		case dialect == "sqlite":
 			switch m.PKType {
 			case "int", "int8", "int16", "int32", "int64":
 				pk.Type = "INTEGER PRIMARY KEY AUTOINCREMENT"
 			default:
 				pk.Type = GoTypeToSQL(m.PKType, dialect) + " PRIMARY KEY"
 			}
-		} else {
+		default:
 			switch m.PKType {
 			case "int", "int32":
 				pk.Type = "SERIAL PRIMARY KEY"
