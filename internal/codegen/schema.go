@@ -295,7 +295,7 @@ func GenerateDropSchema(models []ModelInfo) string {
 // SQLite cannot ALTER COLUMN TYPE or SET/DROP NOT NULL; those changes are emitted
 // as clearly-marked WARNING comments rather than silently skipped. Column renames
 // are not detected and surface as a drop + add.
-func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) {
+func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string, err error) {
 	var up, down []string
 
 	oldEnums := indexEnums(old.Enums)
@@ -345,7 +345,10 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) 
 		if !ok {
 			continue
 		}
-		tu, td := diffTable(ot, nt, dialect)
+		tu, td, dErr := diffTable(ot, nt, dialect)
+		if dErr != nil {
+			return "", "", dErr
+		}
 		up = append(up, tu...)
 		down = append(down, td...)
 	}
@@ -376,7 +379,7 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) 
 	}
 
 	if len(up) == 0 && len(down) == 0 {
-		return "", ""
+		return "", "", nil
 	}
 	// The down migration must undo the up steps in reverse order so that
 	// dependencies hold (e.g. a recreated table's enum type is created before
@@ -384,12 +387,75 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) 
 	for i, j := 0, len(down)-1; i < j; i, j = i+1, j-1 {
 		down[i], down[j] = down[j], down[i]
 	}
-	return strings.Join(up, "\n"), strings.Join(down, "\n")
+	return strings.Join(up, "\n"), strings.Join(down, "\n"), nil
+}
+
+// resolveColumnRenames matches each new column that declares a RenamedFrom
+// marker against the old schema, and returns the {oldName, newName} pairs that
+// are real renames.
+//
+// A marker whose old column is absent from the old schema is spent: the rename
+// already ran, and the schemas agree. It is ignored, not an error.
+//
+// A marker is rejected when it is ambiguous — when both the old and the new
+// name exist in the old schema, so applying the rename would destroy the
+// existing new-named column — or when two new columns claim the same old name.
+func resolveColumnRenames(old, new Table) ([][2]string, error) {
+	oldCols := indexColumns(old.Columns)
+	claimed := make(map[string]string)
+
+	var renames [][2]string
+	for _, nc := range new.Columns {
+		if nc.RenamedFrom == "" {
+			continue
+		}
+		if _, exists := oldCols[nc.RenamedFrom]; !exists {
+			continue // spent marker
+		}
+		if _, alsoExists := oldCols[nc.Name]; alsoExists {
+			return nil, fmt.Errorf(
+				"codegen: table %s: ambiguous rename: column %q says renamed_from=%q, but both %q and %q already exist; "+
+					"remove the marker, or drop one of the columns first",
+				old.Name, nc.Name, nc.RenamedFrom, nc.RenamedFrom, nc.Name)
+		}
+		if prev, dup := claimed[nc.RenamedFrom]; dup {
+			return nil, fmt.Errorf(
+				"codegen: table %s: columns %q and %q both declare renamed_from=%q; a column can be renamed to one name only",
+				old.Name, prev, nc.Name, nc.RenamedFrom)
+		}
+		claimed[nc.RenamedFrom] = nc.Name
+		renames = append(renames, [2]string{nc.RenamedFrom, nc.Name})
+	}
+	return renames, nil
 }
 
 // diffTable diffs the columns and indexes of a table that exists in both schemas.
-func diffTable(old, new Table, dialect string) (up, down []string) {
-	oldCols := indexColumns(old.Columns)
+func diffTable(old, new Table, dialect string) (up, down []string, err error) {
+	renames, err := resolveColumnRenames(old, new)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Emit the renames first, so every later statement can name the new column.
+	renamedOld := make(map[string]string, len(renames)) // old name -> new name
+	for _, r := range renames {
+		renamedOld[r[0]] = r[1]
+		up = append(up, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;",
+			quoteIdent(new.Name), quoteIdent(r[0]), quoteIdent(r[1])))
+		down = append(down, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;",
+			quoteIdent(new.Name), quoteIdent(r[1]), quoteIdent(r[0])))
+	}
+
+	// Index the old columns under their new names, so a renamed column is
+	// "present in both" for the add/drop/modify passes below.
+	oldCols := make(map[string]Column, len(old.Columns))
+	for _, c := range old.Columns {
+		name := c.Name
+		if nn, renamed := renamedOld[name]; renamed {
+			name = nn
+		}
+		oldCols[name] = c
+	}
 	newCols := indexColumns(new.Columns)
 
 	// Added columns (preserve new-table order).
@@ -406,9 +472,15 @@ func diffTable(old, new Table, dialect string) (up, down []string) {
 		}
 	}
 
-	// Dropped columns (preserve old-table order).
+	// Dropped columns (preserve old-table order). A renamed column is looked
+	// up by its new name — it is present in newCols under that name, so it is
+	// not dropped here; the rename statement above already handled it.
 	for _, c := range old.Columns {
-		if _, ok := newCols[c.Name]; !ok {
+		name := c.Name
+		if nn, renamed := renamedOld[name]; renamed {
+			name = nn
+		}
+		if _, ok := newCols[name]; !ok {
 			up = append(up, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", quoteIdent(old.Name), quoteIdent(c.Name)))
 			down = append(down, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;", quoteIdent(old.Name), columnDefSQL(c, dialect)))
 		}
@@ -441,7 +513,7 @@ func diffTable(old, new Table, dialect string) (up, down []string) {
 		}
 	}
 
-	return up, down
+	return up, down, nil
 }
 
 // diffColumn emits ALTER statements for a column whose definition changed between

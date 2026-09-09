@@ -63,7 +63,8 @@ func TestStringEnumGrowth_AppliesToPostgres(t *testing.T) {
 				EnumValues: []string{"admin", "user", "moderator"}},
 		},
 	}}
-	up, _ := codegen.DiffSchemas(codegen.BuildSchema(v1, "postgres"), codegen.BuildSchema(v2, "postgres"), "postgres")
+	up, _, err := codegen.DiffSchemas(codegen.BuildSchema(v1, "postgres"), codegen.BuildSchema(v2, "postgres"), "postgres")
+	require.NoError(t, err)
 	require.NotEmpty(t, up, "growing an enum must not produce an empty migration")
 	require.Contains(t, up, `ADD VALUE 'moderator'`)
 

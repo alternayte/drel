@@ -72,7 +72,8 @@ func TestDiffSchemas_AppliesToRealPostgres(t *testing.T) {
 		},
 	}
 
-	up, down := codegen.DiffSchemas(codegen.BuildSchema(v1, "postgres"), codegen.BuildSchema(v2, "postgres"), "postgres")
+	up, down, err := codegen.DiffSchemas(codegen.BuildSchema(v1, "postgres"), codegen.BuildSchema(v2, "postgres"), "postgres")
+	require.NoError(t, err)
 	require.NotEmpty(t, up)
 
 	_, err = drv.Exec(ctx, up)

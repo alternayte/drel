@@ -299,7 +299,8 @@ func TestIntegration_FirstMigration_RoundTrip_PivotAndEnum(t *testing.T) {
 	//   up   = CREATE TYPE / CREATE TABLE ...  (apply the schema)
 	//   down = DROP TABLE / DROP TYPE ...      (undo — written to .down.sql)
 	// We use the same call here so the test exercises the real generated SQL.
-	up, down := codegen.DiffSchemas(codegen.Schema{}, desired, "postgres")
+	up, down, err := codegen.DiffSchemas(codegen.Schema{}, desired, "postgres")
+	require.NoError(t, err)
 	require.NotEmpty(t, up, "DiffSchemas must produce UP SQL for non-empty desired schema")
 	require.NotEmpty(t, down, "DiffSchemas must produce DOWN SQL for non-empty desired schema")
 
@@ -309,7 +310,7 @@ func TestIntegration_FirstMigration_RoundTrip_PivotAndEnum(t *testing.T) {
 
 	// up → down → up must succeed. The generated down SQL must drop the pivot
 	// before its parent tables (FK ordering); Postgres rejects the DROP otherwise.
-	_, err := runner.Up(ctx)
+	_, err = runner.Up(ctx)
 	require.NoError(t, err)
 	require.NoError(t, runner.Down(ctx))
 
