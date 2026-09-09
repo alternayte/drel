@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -173,6 +174,24 @@ func TestEmitDBFile_ModuleSets(t *testing.T) {
 	// A module holds every model of its packages.
 	assert.Contains(t, out, "Comments *posts.CommentRepository")
 	assert.Contains(t, out, "Comments *posts.TxCommentRepository")
+
+	// The holders must be filled, not only declared. A struct field that is
+	// declared and never assigned leaves a nil repository, which panics at the
+	// first call.
+	assert.Contains(t, out, "Modules: Modules{",
+		"Open must fill the untracked holder")
+	assert.Contains(t, out, "Modules: TxModules{",
+		"Tx must fill the tracked holder")
+	assert.Contains(t, out, "Posts: PostsRepos{")
+	assert.Contains(t, out, "Posts: PostsTxRepos{")
+	assert.Contains(t, out, "Users: UsersRepos{")
+	assert.Contains(t, out, "Users: UsersTxRepos{")
+
+	// Every model of a module reaches both holders.
+	assert.Equal(t, 2, strings.Count(out, "drel.NewRepository(engine, posts.CommentMeta)"),
+		"the comment repository appears in the flat field and in the module set")
+	assert.Equal(t, 2, strings.Count(out, "drel.NewTxRepository(tx, posts.CommentMeta)"),
+		"the tracked comment repository appears in the flat field and in the module set")
 }
 
 // TestEmitDBFile_NoModulesEmitsNoHolder proves a project that lists packages

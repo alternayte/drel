@@ -52,8 +52,8 @@ func main() {
 
 	// === Seed users ===
 	fmt.Println("=== Seed users ===")
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, users.UserMeta)
+	err = database.WithTx(ctx, func(ctx context.Context) error {
+		repo := database.Tx(ctx).Users
 		repo.Add(users.NewUser("Alice", 1000))
 		repo.Add(users.NewUser("Bob", 500))
 		return nil
@@ -92,8 +92,8 @@ func main() {
 
 	// === Transfer ===
 	fmt.Println("\n=== Transfer 200 from Alice to Bob ===")
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, users.UserMeta)
+	err = database.WithTx(ctx, func(ctx context.Context) error {
+		repo := database.Tx(ctx).Users
 
 		alice, err := repo.Find(ctx, 1)
 		if err != nil {

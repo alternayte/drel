@@ -127,6 +127,20 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 		fieldName := pluralize(m.Name)
 		b.WriteString(fmt.Sprintf("\t\t%s: &%s.Tx%sRepository{TxRepository: drel.NewTxRepository(tx, %s.%sMeta)},\n", fieldName, alias, m.Name, alias, m.Name))
 	}
+	if hasModules(models) {
+		names, byModule := modulesOf(models)
+		b.WriteString("\t\tModules: TxModules{\n")
+		for _, name := range names {
+			b.WriteString(fmt.Sprintf("\t\t\t%s: %sTxRepos{\n", exportName(name), exportName(name)))
+			for _, m := range byModule[name] {
+				alias := aliases[m.PkgPath]
+				b.WriteString(fmt.Sprintf("\t\t\t\t%s: &%s.Tx%sRepository{TxRepository: drel.NewTxRepository(tx, %s.%sMeta)},\n",
+					pluralize(m.Name), alias, m.Name, alias, m.Name))
+			}
+			b.WriteString("\t\t\t},\n")
+		}
+		b.WriteString("\t\t},\n")
+	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")
 

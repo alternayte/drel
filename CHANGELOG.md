@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- **`db.Tx(ctx).Modules` returned nil repositories.** The generated `Tx(ctx)`
+  declared the `Modules` field of `TxRepos` and never assigned it, so the first
+  call on a slice-scoped tracked repository panicked with a nil pointer.
+  `db.Modules` was unaffected, because `Open` did fill it. Regenerate to pick up
+  the fix. The defect is in v0.7.0.
+- The `model-features` example created its table without the `tags` and
+  `metadata` columns, so it failed on every run.
+
+### Added
+
+- Three examples: `inbox`, `event-sourcing` and `feature-slices`. Every example
+  now uses `WithTx`.
+
 ## [0.7.0] - 2026-09-09
 
 Event-sourcing release. It completes the host-integration plan: an append-only

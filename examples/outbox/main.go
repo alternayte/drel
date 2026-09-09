@@ -91,11 +91,11 @@ func placeOrders(ctx context.Context, database *db.DB) {
 	}
 	var placedIDs []uuid.UUID
 	for _, s := range []spec{{"Alice", 4200}, {"Bob", 1599}} {
-		err := database.Transaction(ctx, func(tx *drel.Tx) error {
+		err := database.WithTx(ctx, func(ctx context.Context) error {
 			o := orders.NewOrder(s.customer, s.total)
 			// Add() stamps a UUIDv7 id immediately — o.ID() is valid right away,
 			// no mid-transaction flush needed to "get the id".
-			drel.Repo(tx, orders.OrderMeta).Add(o)
+			database.Tx(ctx).Orders.Add(o)
 			o.Place()
 			placedIDs = append(placedIDs, o.ID())
 			fmt.Printf("  placed order %s for %s (%d cents)\n", o.ID(), o.Customer, o.Total)
@@ -109,9 +109,8 @@ func placeOrders(ctx context.Context, database *db.DB) {
 	}
 
 	// Ship the first placed order — records OrderShipped, also via the outbox.
-	err := database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.Repo(tx, orders.OrderMeta)
-		o, err := repo.Find(ctx, placedIDs[0])
+	err := database.WithTx(ctx, func(ctx context.Context) error {
+		o, err := database.Tx(ctx).Orders.Find(ctx, placedIDs[0])
 		if err != nil {
 			return err
 		}
@@ -138,9 +137,9 @@ func demoRollbackIsAtomic(ctx context.Context, database *db.DB) {
 	// the outbox write happens inside the same transaction, the rollback drops
 	// the order AND its event together — no orphaned message escapes.
 	errBoom := errors.New("payment declined")
-	err := database.Transaction(ctx, func(tx *drel.Tx) error {
+	err := database.WithTx(ctx, func(ctx context.Context) error {
 		o := orders.NewOrder("Mallory", 999999)
-		drel.Repo(tx, orders.OrderMeta).Add(o)
+		database.Tx(ctx).Orders.Add(o)
 		o.Place()
 		return errBoom // force rollback
 	})

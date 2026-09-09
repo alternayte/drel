@@ -64,11 +64,11 @@ func demoSoftDelete(ctx context.Context, database *db.DB) {
 
 	// Create an article
 	var articleID int
-	err := database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, articles.ArticleMeta)
+	err := database.WithTx(ctx, func(ctx context.Context) error {
+		repo := database.Tx(ctx).Articles
 		a := &articles.Article{Title: "Soft Delete Demo", Body: "This article will be soft-deleted."}
 		repo.Add(a)
-		if err := tx.SaveChanges(ctx); err != nil {
+		if err := drel.MustFromContext(ctx).SaveChanges(ctx); err != nil {
 			return err
 		}
 		articleID = a.ID()
@@ -108,17 +108,17 @@ func demoSoftDelete(ctx context.Context, database *db.DB) {
 	fmt.Println("\n  --- HardRemove ---")
 
 	var hardID int
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, articles.ArticleMeta)
+	err = database.WithTx(ctx, func(ctx context.Context) error {
+		repo := database.Tx(ctx).Articles
 		a := &articles.Article{Title: "Hard Delete Demo", Body: "This article will be permanently deleted."}
 		repo.Add(a)
-		if err := tx.SaveChanges(ctx); err != nil {
+		if err := drel.MustFromContext(ctx).SaveChanges(ctx); err != nil {
 			return err
 		}
 		hardID = a.ID()
 		fmt.Printf("  Created article %d: %q\n", a.ID(), a.Title)
 
-		return tx.HardRemove(a)
+		return drel.MustFromContext(ctx).HardRemove(a)
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -142,8 +142,8 @@ func demoVersioning(ctx context.Context, database *db.DB) {
 
 	// Create an article — version starts at 1
 	article := &articles.Article{Title: "Version Demo", Body: "Original body."}
-	err := database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, articles.ArticleMeta)
+	err := database.WithTx(ctx, func(ctx context.Context) error {
+		repo := database.Tx(ctx).Articles
 		repo.Add(article)
 		return nil
 	})
@@ -153,8 +153,8 @@ func demoVersioning(ctx context.Context, database *db.DB) {
 	fmt.Printf("  Created article %d: version=%d\n", article.ID(), article.Version())
 
 	// Update the article — version becomes 2
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, articles.ArticleMeta)
+	err = database.WithTx(ctx, func(ctx context.Context) error {
+		repo := database.Tx(ctx).Articles
 		a, err := repo.Find(ctx, article.ID())
 		if err != nil {
 			return err
@@ -246,6 +246,8 @@ func setup(ctx context.Context, database *db.DB) {
 			id         SERIAL PRIMARY KEY,
 			title      TEXT NOT NULL,
 			body       TEXT NOT NULL,
+			tags       JSONB NOT NULL DEFAULT '[]'::jsonb,
+			metadata   JSONB NOT NULL DEFAULT '{}'::jsonb,
 			deleted_at TIMESTAMPTZ,
 			version    INTEGER NOT NULL DEFAULT 1,
 			created_by TEXT NOT NULL DEFAULT '',

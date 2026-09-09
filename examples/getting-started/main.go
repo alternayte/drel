@@ -52,11 +52,14 @@ func main() {
 
 	// === INSERT via transaction ===
 	fmt.Println("=== Insert tasks ===")
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, models.TaskMeta)
-		repo.Add(models.NewTask("Build drel ORM", 1))
-		repo.Add(models.NewTask("Write documentation", 2))
-		repo.Add(models.NewTask("Add SQLite support", 3))
+	// WithTx opens a transaction and puts it in the context. db.Tx(ctx) then
+	// gives the tracked repositories of that transaction. The commit is
+	// automatic when the function returns nil.
+	err = database.WithTx(ctx, func(ctx context.Context) error {
+		tasks := database.Tx(ctx).Tasks
+		tasks.Add(models.NewTask("Build drel ORM", 1))
+		tasks.Add(models.NewTask("Write documentation", 2))
+		tasks.Add(models.NewTask("Add SQLite support", 3))
 		return nil
 	})
 	if err != nil {
@@ -77,9 +80,10 @@ func main() {
 
 	// === UPDATE with change tracking ===
 	fmt.Println("\n=== Mark first task done ===")
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, models.TaskMeta)
-		task, err := repo.Find(ctx, 1)
+	// A tracked read plus a domain method is a partial UPDATE: only the
+	// changed column reaches the database.
+	err = database.WithTx(ctx, func(ctx context.Context) error {
+		task, err := database.Tx(ctx).Tasks.Find(ctx, 1)
 		if err != nil {
 			return err
 		}

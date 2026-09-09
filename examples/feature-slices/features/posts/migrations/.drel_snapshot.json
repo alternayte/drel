@@ -1,0 +1,37 @@
+{
+  "tables": [
+    {
+      "name": "posts",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER PRIMARY KEY AUTOINCREMENT",
+          "notNull": true,
+          "pk": true
+        },
+        {
+          "name": "title",
+          "type": "TEXT",
+          "notNull": true
+        },
+        {
+          "name": "author_id",
+          "type": "INTEGER",
+          "notNull": true
+        },
+        {
+          "name": "created_at",
+          "type": "DATETIME",
+          "notNull": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "type": "DATETIME",
+          "notNull": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ]
+    }
+  ]
+}

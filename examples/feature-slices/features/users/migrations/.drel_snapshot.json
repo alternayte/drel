@@ -1,0 +1,37 @@
+{
+  "tables": [
+    {
+      "name": "users",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER PRIMARY KEY AUTOINCREMENT",
+          "notNull": true,
+          "pk": true
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "notNull": true
+        },
+        {
+          "name": "email",
+          "type": "TEXT",
+          "notNull": true
+        },
+        {
+          "name": "created_at",
+          "type": "DATETIME",
+          "notNull": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "type": "DATETIME",
+          "notNull": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ]
+    }
+  ]
+}

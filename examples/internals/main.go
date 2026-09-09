@@ -9,6 +9,10 @@
 // string Contains) AND transactions (insert, update with change
 // tracking, delete, rollback, mid-tx SaveChanges).
 //
+// It shows both transaction forms. Engine.WithTx puts the transaction in the
+// context, which is what generated code does through db.WithTx and db.Tx(ctx).
+// Engine.Transaction passes the transaction by hand.
+//
 // Usage:
 //
 //	export DATABASE_URL="postgres://localhost:5432/drelexample?sslmode=disable"
@@ -171,8 +175,11 @@ func main() {
 
 	// INSERT
 	fmt.Println("\n=== Insert via transaction ===")
-	err = engine.Transaction(ctx, func(tx *drel.Tx) error {
-		txRepo := drel.NewTxRepository(tx, ProductMeta)
+	// WithTx is the form generated code uses: it puts the transaction in the
+	// context, and MustFromContext reads it back. Engine.Transaction below is
+	// the same machinery with the transaction passed by hand.
+	err = engine.WithTx(ctx, func(ctx context.Context) error {
+		txRepo := drel.NewTxRepository(drel.MustFromContext(ctx), ProductMeta)
 		laptop := &Product{Name: "Laptop", Price: 99900, InStock: true}
 		txRepo.Add(laptop)
 		return nil // auto-flush + commit

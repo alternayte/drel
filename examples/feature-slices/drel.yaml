@@ -1,0 +1,12 @@
+# Each module is one feature slice. A slice owns its models and its migrations,
+# so deleting the directory removes the feature completely.
+modules:
+  - name: users
+    packages: [./features/users]
+  - name: posts
+    packages: [./features/posts]
+
+output:
+  db: ./db/drel_gen.go
+
+dialect: sqlite
