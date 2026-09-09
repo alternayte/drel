@@ -23,6 +23,11 @@ type Table struct {
 	Columns    []Column `json:"columns"`
 	Indexes    []Index  `json:"indexes,omitempty"`
 	PrimaryKey []string `json:"primaryKey,omitempty"`
+
+	// RenamedFrom is the table's previous name, declared by a renamed_from
+	// marker on the model. It is a diff-time input only, never persisted: a
+	// marker in the snapshot would make every future diff re-emit the rename.
+	RenamedFrom string `json:"-"`
 }
 
 // Column describes a single column. Type is the dialect-resolved SQL type
@@ -37,6 +42,9 @@ type Column struct {
 	Check   string `json:"check,omitempty"`
 	Ref     string `json:"ref,omitempty"`
 	PK      bool   `json:"pk,omitempty"`
+
+	// RenamedFrom is the column's previous name. Diff-time only; see Table.
+	RenamedFrom string `json:"-"`
 }
 
 // Index describes a single (possibly composite, possibly unique) index.
@@ -116,6 +124,7 @@ func buildEnums(models []ModelInfo) []EnumDef {
 // user columns, trait columns, and indexes derived from db tag options.
 func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 	t := Table{Name: m.TableName}
+	t.RenamedFrom = m.RenamedFrom
 
 	// Primary key column.
 	pk := Column{Name: "id", PK: true, NotNull: true}
@@ -165,7 +174,7 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 		// its Value() returns nil for the zero value, so the column must be nullable.
 		// Otherwise, use the standard pointer-prefix heuristic.
 		notNull := !strings.HasPrefix(f.GoType, "*") && !(f.IsVO && f.HasIsZero)
-		c := Column{Name: f.ColumnName, NotNull: notNull}
+		c := Column{Name: f.ColumnName, NotNull: notNull, RenamedFrom: f.RenamedFrom}
 		var sqlType string
 		switch {
 		case f.TypeOverride != "":

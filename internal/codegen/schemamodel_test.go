@@ -1,6 +1,12 @@
 package codegen
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 // TestBuildTable_NullableVOHasIsZero verifies that a single-column VO whose type
 // defines IsZero() bool produces a nullable column in the generated DDL.
@@ -94,4 +100,43 @@ func TestBuildTable_MultiColVOColumns(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestBuildSchema_CarriesTheRenameMarkers(t *testing.T) {
+	m := ModelInfo{
+		Name:        "Order",
+		TableName:   "orders",
+		RenamedFrom: "purchases",
+		PKType:      "int",
+		Fields: []FieldInfo{
+			{Name: "Total", GoType: "int", ColumnName: "total_cents",
+				RenamedFrom: "total", IsExported: true},
+		},
+	}
+	s := BuildSchema([]ModelInfo{m}, "postgres")
+	require.Len(t, s.Tables, 1)
+	assert.Equal(t, "purchases", s.Tables[0].RenamedFrom)
+
+	var col Column
+	for _, c := range s.Tables[0].Columns {
+		if c.Name == "total_cents" {
+			col = c
+		}
+	}
+	assert.Equal(t, "total", col.RenamedFrom)
+}
+
+func TestSchema_RenameMarkersAreNotSerializedIntoTheSnapshot(t *testing.T) {
+	s := Schema{Tables: []Table{{
+		Name:        "orders",
+		RenamedFrom: "purchases",
+		Columns: []Column{
+			{Name: "total_cents", Type: "integer", RenamedFrom: "total"},
+		},
+	}}}
+	blob, err := json.Marshal(s)
+	require.NoError(t, err)
+	assert.NotContains(t, string(blob), "purchases",
+		"a marker in the snapshot would resurrect the rename on every future diff")
+	assert.NotContains(t, string(blob), `"total"`)
 }
