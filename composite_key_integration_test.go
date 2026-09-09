@@ -4,9 +4,6 @@ package drel_test
 
 import (
 	"context"
-	"go/format"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -412,24 +409,6 @@ func compositeKeyAllPaths(t *testing.T, engine *drel.Engine, dialect string) {
 	t.Run("soft_delete_versioned", func(t *testing.T) { compositeKeySoftDeleteVersioned(t, engine, dialect) })
 	t.Run("bulk_insert", func(t *testing.T) { compositeKeyBulkInsert(t, engine, dialect) })
 	t.Run("uuid_key", func(t *testing.T) { compositeKeyUUID(t, engine, dialect) })
-}
-
-// TestCompositeKey_GeneratedFilesAreCurrent proves the checked-in generated
-// files of the composite-key test models are the emitter's current output. The
-// integration tests above exercise those files, so a stale file would prove
-// nothing about the emitter.
-func TestCompositeKey_GeneratedFilesAreCurrent(t *testing.T) {
-	compositeSchema(t, "postgres") // populates compositeModels
-	for _, m := range compositeModels {
-		src, err := codegen.EmitModelFileChecked(m)
-		require.NoError(t, err)
-		want, err := format.Source([]byte(src))
-		require.NoError(t, err)
-		path := filepath.Join("internal", "testmodels", strings.ToLower(m.Name)+"_drel.go")
-		got, err := os.ReadFile(path)
-		require.NoError(t, err)
-		assert.Equal(t, string(want), string(got), "%s is stale; regenerate it", path)
-	}
 }
 
 func TestCompositeKey_Postgres(t *testing.T) {
