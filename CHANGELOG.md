@@ -25,9 +25,10 @@ minor versions may contain breaking changes.
 
 ### Changed
 
-- BREAKING: `codegen.DiffSchemas` now returns `(upSQL, downSQL string, err error)`.
-  A rename marker can be ambiguous, and an ambiguous rename must fail rather
-  than guess.
+- Internal only, no effect on drel users: `codegen.DiffSchemas` (in
+  `internal/codegen`, not importable outside this module) now returns
+  `(upSQL, downSQL string, err error)`. A rename marker can be ambiguous, and
+  an ambiguous rename must fail rather than guess.
 
 ## [0.7.1] - 2026-09-09
 
