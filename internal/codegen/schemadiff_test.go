@@ -492,7 +492,7 @@ func TestDiffSchemas_GrowIntEnum_ProducesMigration(t *testing.T) {
 
 	for _, dialect := range []string{"postgres", "sqlite"} {
 		up, _, err := DiffSchemas(BuildSchema(v1, dialect), BuildSchema(v2, dialect), dialect)
-	require.NoError(t, err)
+		require.NoError(t, err)
 		assert.NotEqual(t, "", up, "growing an int enum must not produce an empty migration on %s", dialect)
 		// The migration references the changed CHECK value set.
 		assert.Contains(t, up, "2", "migration should reference the newly added enum value on %s", dialect)
