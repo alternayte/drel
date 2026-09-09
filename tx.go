@@ -361,10 +361,12 @@ func (r *TxRepository[T]) AsNoTracking() *TxQueryBuilder[T] {
 	return qb
 }
 
-// Find looks up a single record by primary key and begins tracking it.
+// Find looks up a single record by primary key and begins tracking it. For a
+// composite key, id is the model's key struct.
 func (r *TxRepository[T]) Find(ctx context.Context, id any) (*T, error) {
 	qb := newTxQueryBuilder(r.tx, &r.meta, r.base)
-	return qb.Where(newComparison(r.meta.PKColumn, ast.OpEq, id)).First(ctx)
+	cols := pkColumnsOf(r.meta.PKColumn, r.meta.PKColumns)
+	return qb.Where(pkPredicate(cols, keyValuesOf(r.meta.KeyValues, id))).First(ctx)
 }
 
 // Where starts a filtered, tracked query within the transaction.
@@ -671,7 +673,7 @@ func (q *TxQueryBuilder[T]) Page(ctx context.Context) (*CursorPage[T], error) {
 		return nil, ErrInvalidPageSize
 	}
 	pageSize := *q.limit
-	order := cursorOrder(q.orderBy, q.meta.PKColumn)
+	order := cursorOrder(q.orderBy, pkColumnsOf(q.meta.PKColumn, q.meta.PKColumns))
 
 	backward := q.before != nil
 	queryOrder := order

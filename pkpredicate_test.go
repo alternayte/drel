@@ -42,3 +42,21 @@ func TestKeyValuesOf_FallsBackToTheWholeKey(t *testing.T) {
 	split := func(k any) []any { return []any{k, 2} }
 	assert.Equal(t, []any{7, 2}, keyValuesOf(split, 7))
 }
+
+func TestFind_CompositeKeyBuildsAnAndedPredicate(t *testing.T) {
+	cols := pkColumnsOf("", []string{"order_id", "line_no"})
+	split := func(k any) []any {
+		key := k.(struct {
+			OrderID int
+			LineNo  int
+		})
+		return []any{key.OrderID, key.LineNo}
+	}
+	p := pkPredicate(cols, keyValuesOf(split, struct {
+		OrderID int
+		LineNo  int
+	}{3, 1}))
+	require.Len(t, p.clause.Children, 2)
+	assert.Equal(t, 3, p.clause.Children[0].Comparison.Value)
+	assert.Equal(t, 1, p.clause.Children[1].Comparison.Value)
+}

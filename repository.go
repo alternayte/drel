@@ -2,8 +2,6 @@ package drel
 
 import (
 	"context"
-
-	"github.com/alternayte/drel/internal/ast"
 )
 
 // ModelMeta describes the database mapping for a model type T.
@@ -143,10 +141,12 @@ func (r *Repository[T]) newBuilder() *QueryBuilder[T] {
 	return newQueryBuilder(r.engine, &r.meta)
 }
 
-// Find looks up a single record by its primary key.
+// Find looks up a single record by its primary key. For a composite key, id is
+// the model's key struct.
 func (r *Repository[T]) Find(ctx context.Context, id any) (*T, error) {
+	cols := pkColumnsOf(r.meta.PKColumn, r.meta.PKColumns)
 	return r.newBuilder().
-		Where(newComparison(r.meta.PKColumn, ast.OpEq, id)).
+		Where(pkPredicate(cols, keyValuesOf(r.meta.KeyValues, id))).
 		First(ctx)
 }
 

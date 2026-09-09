@@ -52,11 +52,14 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 			}
 			// Include the (already-stamped) PK in the INSERT and read back only
 			// the DB-generated timestamps — never the id.
-			cols = append([]string{te.meta.PKColumn}, cols...)
-			vals = append([]any{te.meta.PKValue(te.entity)}, vals...)
+			insertPKCols := pkColumnsOf(te.meta.PKColumn, te.meta.PKColumns)
+			insertPKVals := keyValuesOf(te.meta.KeyValues, te.meta.PKValue(te.entity))
+			cols = append(append([]string(nil), insertPKCols...), cols...)
+			vals = append(append([]any(nil), insertPKVals...), vals...)
 		}
 
-		returning := []string{"id", "created_at", "updated_at"}
+		pkCols := pkColumnsOf(te.meta.PKColumn, te.meta.PKColumns)
+		returning := append(append([]string(nil), pkCols...), "created_at", "updated_at")
 		scan := te.meta.ScanReturning
 		if appAssigned {
 			returning = []string{"created_at", "updated_at"}
