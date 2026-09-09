@@ -211,6 +211,12 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
 - **Raw SQL escape hatches** -- `Engine.Exec`, `Engine.Query`,
   `Engine.QueryRow`, `RawQuery[T]`, and `Tx.Exec`, `Tx.QueryRow` for anything
   the ORM does not cover.
+- **Composite and named primary keys** -- pass a comparable struct to
+  `drel.Model[K]` for a multi-column key, one column per exported field, named
+  by its own `db` tag; or set the first position of the `db` tag on the
+  embedded `drel.Model` field to name a single scalar key column, for example
+  `drel.Model[string] \`db:"code"\``. A single `string` primary key is
+  supported.
 
 ## Examples
 
@@ -231,10 +237,13 @@ See [examples/](examples/) for working samples:
 - [feature-slices](examples/feature-slices/) -- one module for each slice: per-slice migrations, `ApplyMigrationsFS`, and `db.Modules.<Slice>`
 - [observability](examples/observability/) -- structured query logging, tracing spans, and dev-mode diagnostics
 - [uuid-keys](examples/uuid-keys/) -- application-assigned UUIDv7 primary keys
+- [composite-keys](examples/composite-keys/) -- a multi-column, application-assigned primary key
 - [internals](examples/internals/) -- what codegen produces, hand-written, to see the machinery
 
 Primary keys: integer auto-increment by default; use `drel.Model[uuid.UUID]`
-for app-assigned UUIDv7 (stamped at `Add()`).
+for app-assigned UUIDv7 (stamped at `Add()`), `drel.Model[string]` for a named
+single-column key (for example `db:"code"`), or a comparable struct for a
+composite key (application-assigned, one column per exported field).
 
 ## Dialects
 
@@ -259,8 +268,15 @@ for app-assigned UUIDv7 (stamped at `Add()`).
 - True JOIN-based eager loading is intentionally not offered; relationships
   load via batched split queries (correct for every shape, no cartesian
   products).
-- Primary keys must be a single surrogate column (`int` auto-increment or
-  `uuid.UUID`); composite and natural keys are not yet supported.
+- A composite-key model cannot be the target of a relationship. A foreign key to
+  a multi-column key is not yet emitted; codegen rejects it at generation time.
+- A composite key must be application-assigned. Auto-increment applies only to a
+  single integer key column.
+- Changing an existing table's primary key is not diffed. `Table.PrimaryKey` is
+  read only when a new table is created; neither `diffTable` nor `DiffSchemas`
+  reads it for an existing table. A composite or renamed key works for a new
+  table. Altering the key of an existing table emits no migration and needs a
+  hand-written one.
 
 ## License
 
