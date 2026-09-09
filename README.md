@@ -167,6 +167,27 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   diff (`drel migrate new`) that emits add/drop/alter for tables, columns,
   types, nullability, and indexes; `up`/`down`/`status`/`lint` for both
   dialects. Declare indexes/checks with `db:` tag options.
+  SQLite emits a real table rebuild for a column type, nullability, default,
+  or CHECK change, instead of a `-- WARNING` comment; several changes to one
+  table produce one rebuild.
+
+  Declare a column or table rename with `renamed_from=` -- drel never guesses
+  a rename, because a wrong guess destroys the old column's data:
+
+  ```go
+  type Order struct {
+      drel.Model[int] `db:"table=orders,renamed_from=purchases"`
+
+      EmailAddress string `db:"email_address,renamed_from=email"`
+  }
+  ```
+
+  `drel migrate new` reads the marker once, emits `ALTER TABLE purchases
+  RENAME TO orders` and `ALTER TABLE orders RENAME COLUMN email TO
+  email_address`, and after that the marker is no longer needed -- remove it
+  once its migration is generated. An ambiguous marker (the old name is still
+  in use, or two columns claim the same old name) fails migration generation
+  rather than guess.
 - **Read replicas** -- `WithReadReplica` round-robins reads; writes and
   transactions use the primary; `Primary()` forces read-your-writes.
 - **Query batching** -- `NewBatch` + `BatchAll`/`BatchFirst`/`BatchCount`
@@ -226,10 +247,13 @@ for app-assigned UUIDv7 (stamped at `Add()`).
 
 ## Limitations
 
-- Migration diffing does not auto-detect column **renames** — a rename appears
-  as drop + add; edit the generated SQL if you intend a rename. SQLite cannot
-  `ALTER COLUMN TYPE`/nullability in place, so those changes are emitted as
-  loud `-- WARNING` comments to be applied by hand.
+- Migration renames must be declared, not inferred. Mark a renamed column with
+  `db:"new_name,renamed_from=old_name"`, and a renamed table with
+  `renamed_from=` on the embedded `drel.Model` field. Without a marker a rename
+  appears as a drop and an add, which destroys the column's data. drel does not
+  guess renames: a wrong guess is unrecoverable.
+- Index renames are emitted as a drop and a create. This is lossless, so no
+  marker is offered for them.
 - Bulk `Set` accepts `any` values — type safety is enforced on column
   predicates and `Find` but not on bulk mutation values.
 - True JOIN-based eager loading is intentionally not offered; relationships

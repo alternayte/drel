@@ -95,6 +95,14 @@ func scanPackage(pkg *packages.Package) ([]ModelInfo, error) {
 		}
 
 		mi.TableName = inferTableName(tn.Name())
+		_, modelOpts, mErr := parseModelTag(pkInfo.Tag)
+		if mErr != nil {
+			return nil, fmt.Errorf("codegen: model %s: %w", tn.Name(), mErr)
+		}
+		if modelOpts.table != "" {
+			mi.TableName = modelOpts.table
+		}
+		mi.RenamedFrom = modelOpts.renamedFrom
 		mi.HasSoftDelete, mi.HasVersioned, mi.HasAudit = detectEmbeds(st)
 		flds, fErr := extractFields(st, pkg.PkgPath)
 		if fErr != nil {
@@ -133,6 +141,7 @@ type pkTypeInfo struct {
 	Display string // short name for generated code (e.g., "int", "uuid.UUID")
 	Full    string // fully qualified (e.g., "github.com/google/uuid.UUID")
 	PkgPath string // import path (empty for primitives)
+	Tag     string // raw struct tag on the embedded drel.Model field
 }
 
 func findModelEmbed(st *types.Struct) (info pkTypeInfo, found bool) {
@@ -169,7 +178,7 @@ func findModelEmbed(st *types.Struct) (info pkTypeInfo, found bool) {
 				}
 			}
 		}
-		return pkTypeInfo{Display: display, Full: full, PkgPath: pkgPath}, true
+		return pkTypeInfo{Display: display, Full: full, PkgPath: pkgPath, Tag: st.Tag(i)}, true
 	}
 	return pkTypeInfo{}, false
 }
@@ -234,6 +243,7 @@ func extractFields(st *types.Struct, ownerPkgPath string) ([]FieldInfo, error) {
 			ColumnName:   dbCol,
 			IsExported:   f.Exported(),
 			RelTag:       relTag,
+			RenamedFrom:  dbOpts.renamedFrom,
 			Unique:       dbOpts.unique,
 			Indexed:      dbOpts.indexed,
 			IndexName:    dbOpts.indexName,
@@ -358,12 +368,14 @@ func parseRelTagStructured(tag string) *RelationFieldInfo {
 
 // dbTagOpts holds the options parsed from a db struct tag after the column name.
 type dbTagOpts struct {
-	unique    bool
-	indexed   bool
-	indexName string
-	check     string
-	def       string // db tag option: column DEFAULT value (db:"...,default=expr")
-	typ       string // db tag option: explicit SQL type override (db:"...,type=jsonb")
+	unique      bool
+	indexed     bool
+	indexName   string
+	check       string
+	def         string // db tag option: column DEFAULT value (db:"...,default=expr")
+	typ         string // db tag option: explicit SQL type override (db:"...,type=jsonb")
+	table       string // db tag option: explicit table name (embedded drel.Model field only)
+	renamedFrom string // db tag option: previous name, for migration rename detection
 }
 
 // parseDBTag splits a db struct tag into its column name and options. The first
@@ -414,11 +426,48 @@ func parseDBTag(rawTag string) (string, dbTagOpts, error) {
 			opts.def = strings.TrimSpace(strings.TrimPrefix(p, "default="))
 		case strings.HasPrefix(p, "type="):
 			opts.typ = strings.TrimSpace(strings.TrimPrefix(p, "type="))
+		case strings.HasPrefix(p, "table="):
+			opts.table = strings.TrimSpace(strings.TrimPrefix(p, "table="))
+			if opts.table == "" {
+				return "", dbTagOpts{}, fmt.Errorf("db tag option table= requires a value")
+			}
+		case strings.HasPrefix(p, "renamed_from="):
+			opts.renamedFrom = strings.TrimSpace(strings.TrimPrefix(p, "renamed_from="))
+			if opts.renamedFrom == "" {
+				return "", dbTagOpts{}, fmt.Errorf("db tag option renamed_from= requires a value (the previous name)")
+			}
 		default:
-			return "", dbTagOpts{}, fmt.Errorf("unknown db tag option %q (known: unique, index, index=, check=, default=, type=)", p)
+			return "", dbTagOpts{}, fmt.Errorf("unknown db tag option %q (known: unique, index, index=, check=, default=, type=, table=, renamed_from=)", p)
 		}
 	}
 	return col, opts, nil
+}
+
+// parseModelTag parses the db struct tag on a model's embedded drel.Model
+// field. Unlike parseDBTag, every comma-separated segment is an option except
+// an optional leading bare name, which is the primary key column name.
+func parseModelTag(rawTag string) (pkColumn string, opts dbTagOpts, err error) {
+	st := reflect.StructTag(rawTag)
+	raw, ok := st.Lookup("db")
+	if !ok || raw == "" {
+		return "", dbTagOpts{}, nil
+	}
+	segments := splitTagOptions(raw)
+	var optionSegments []string
+	for i, s := range segments {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if i == 0 && !strings.ContainsRune(s, '=') && s != "unique" && s != "index" {
+			pkColumn = s
+			continue
+		}
+		optionSegments = append(optionSegments, s)
+	}
+	// Reuse parseDBTag's option handling by giving it an empty column name.
+	_, opts, err = parseDBTag(fmt.Sprintf("db:%q", ","+strings.Join(optionSegments, ",")))
+	return pkColumn, opts, err
 }
 
 // splitTagOptions splits a db-tag option list on commas, ignoring commas that

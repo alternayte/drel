@@ -53,7 +53,8 @@ func TestDiffSchemas_AppliesToRealSQLite(t *testing.T) {
 	schemaV1 := codegen.BuildSchema(v1, "sqlite")
 	schemaV2 := codegen.BuildSchema(v2, "sqlite")
 
-	up, down := codegen.DiffSchemas(schemaV1, schemaV2, "sqlite")
+	up, down, err := codegen.DiffSchemas(schemaV1, schemaV2, "sqlite")
+	require.NoError(t, err)
 	require.NotEmpty(t, up)
 	require.NotEmpty(t, down)
 
@@ -95,11 +96,12 @@ func TestDiffSchemas_DownEnumOrdering(t *testing.T) {
 	}}
 	empty := []codegen.ModelInfo{} // table (and its enum) dropped
 
-	_, down := codegen.DiffSchemas(
+	_, down, err := codegen.DiffSchemas(
 		codegen.BuildSchema(withEnum, "postgres"),
 		codegen.BuildSchema(empty, "postgres"),
 		"postgres",
 	)
+	require.NoError(t, err)
 	createType := strings.Index(down, "CREATE TYPE")
 	createTable := strings.Index(down, "CREATE TABLE")
 	if createType < 0 || createTable < 0 {
@@ -117,7 +119,8 @@ func TestDiffSchemas_NoChange(t *testing.T) {
 		Fields: []codegen.FieldInfo{{Name: "Name", GoType: "string", ColumnName: "name", IsExported: true}},
 	}}
 	s := codegen.BuildSchema(models, "postgres")
-	up, down := codegen.DiffSchemas(s, s, "postgres")
+	up, down, err := codegen.DiffSchemas(s, s, "postgres")
+	require.NoError(t, err)
 	assert.Empty(t, up)
 	assert.Empty(t, down)
 }

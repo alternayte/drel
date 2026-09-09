@@ -291,17 +291,57 @@ func GenerateDropSchema(models []ModelInfo) string {
 //   - dropped tables: DROP TABLE / down recreate
 //   - per-table column add/drop, type changes, NOT NULL changes
 //   - per-table index add/drop
+//   - table and column renames declared with a renamed_from marker
+//   - SQLite table rebuilds for the changes SQLite cannot ALTER in place
 //
-// SQLite cannot ALTER COLUMN TYPE or SET/DROP NOT NULL; those changes are emitted
-// as clearly-marked WARNING comments rather than silently skipped. Column renames
-// are not detected and surface as a drop + add.
-func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) {
+// A table or a column declared with a renamed_from marker emits RENAME instead
+// of a drop and an add; an ambiguous marker is rejected with an error rather
+// than guessed. SQLite cannot ALTER a column's type, nullability, default, or
+// CHECK in place, so those changes are emitted as a full table rebuild (create
+// a scratch table, copy the rows, drop the original, rename, recreate the
+// indexes) rather than as a warning comment or a silent skip.
+func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string, err error) {
 	var up, down []string
 
 	oldEnums := indexEnums(old.Enums)
 	newEnums := indexEnums(newSchema.Enums)
 	oldTables := indexTables(old.Tables)
 	newTables := indexTables(newSchema.Tables)
+
+	tableRenames, err := resolveTableRenames(old, newSchema)
+	if err != nil {
+		return "", "", err
+	}
+	for _, ot := range old.Tables { // old-schema order, for a stable diff
+		nn, renamed := tableRenames[ot.Name]
+		if !renamed {
+			continue
+		}
+		up = append(up, fmt.Sprintf("ALTER TABLE %s RENAME TO %s;",
+			quoteIdent(ot.Name), quoteIdent(nn)))
+		down = append(down, fmt.Sprintf("ALTER TABLE %s RENAME TO %s;",
+			quoteIdent(nn), quoteIdent(ot.Name)))
+	}
+
+	// Re-index the old tables under their new names so the passes below treat a
+	// renamed table as present in both schemas.
+	for oldName, newName := range tableRenames {
+		t := oldTables[oldName]
+		t.Name = newName
+		oldTables[newName] = t
+		delete(oldTables, oldName)
+	}
+
+	// A slice copy of old.Tables with renamed entries relabelled, for the passes
+	// below that iterate the slice (rather than the oldTables map) and would
+	// otherwise treat a renamed table as dropped.
+	oldTablesSlice := make([]Table, len(old.Tables))
+	copy(oldTablesSlice, old.Tables)
+	for i := range oldTablesSlice {
+		if nn, renamed := tableRenames[oldTablesSlice[i].Name]; renamed {
+			oldTablesSlice[i].Name = nn
+		}
+	}
 
 	// 1. New enums (Postgres only).
 	if dialect != "sqlite" {
@@ -330,7 +370,7 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) 
 	// that child/pivot tables (which hold REFERENCES to parents) are dropped
 	// before the parent tables they reference. Without this ordering, Postgres
 	// refuses to drop a parent table while its FK referents still exist.
-	droppedTables := fkSafeDropOrder(old.Tables, newTables)
+	droppedTables := fkSafeDropOrder(oldTablesSlice, newTables)
 	for _, t := range droppedTables {
 		up = append(up, fmt.Sprintf("DROP TABLE IF EXISTS %s;", quoteIdent(t.Name)))
 		down = append(down, strings.TrimRight(createTableSQL(t, dialect), "\n"))
@@ -345,7 +385,10 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) 
 		if !ok {
 			continue
 		}
-		tu, td := diffTable(ot, nt, dialect)
+		tu, td, dErr := diffTable(ot, nt, dialect)
+		if dErr != nil {
+			return "", "", dErr
+		}
 		up = append(up, tu...)
 		down = append(down, td...)
 	}
@@ -376,7 +419,7 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) 
 	}
 
 	if len(up) == 0 && len(down) == 0 {
-		return "", ""
+		return "", "", nil
 	}
 	// The down migration must undo the up steps in reverse order so that
 	// dependencies hold (e.g. a recreated table's enum type is created before
@@ -384,13 +427,128 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string) 
 	for i, j := 0, len(down)-1; i < j; i, j = i+1, j-1 {
 		down[i], down[j] = down[j], down[i]
 	}
-	return strings.Join(up, "\n"), strings.Join(down, "\n")
+	return strings.Join(up, "\n"), strings.Join(down, "\n"), nil
+}
+
+// resolveTableRenames matches each new table that declares a RenamedFrom marker
+// against the old schema, and returns a map from old table name to new table
+// name. The stale and ambiguous rules match resolveColumnRenames.
+func resolveTableRenames(old, new Schema) (map[string]string, error) {
+	oldTables := indexTables(old.Tables)
+	renames := make(map[string]string)
+	claimed := make(map[string]string)
+
+	for _, nt := range new.Tables {
+		if nt.RenamedFrom == "" {
+			continue
+		}
+		if _, exists := oldTables[nt.RenamedFrom]; !exists {
+			continue // spent marker
+		}
+		if _, alsoExists := oldTables[nt.Name]; alsoExists {
+			return nil, fmt.Errorf(
+				"codegen: ambiguous rename: table %q says renamed_from=%q, but both %q and %q already exist; "+
+					"remove the marker, or drop one of the tables first",
+				nt.Name, nt.RenamedFrom, nt.RenamedFrom, nt.Name)
+		}
+		if prev, dup := claimed[nt.RenamedFrom]; dup {
+			return nil, fmt.Errorf(
+				"codegen: tables %q and %q both declare renamed_from=%q; a table can be renamed to one name only",
+				prev, nt.Name, nt.RenamedFrom)
+		}
+		claimed[nt.RenamedFrom] = nt.Name
+		renames[nt.RenamedFrom] = nt.Name
+	}
+	return renames, nil
+}
+
+// resolveColumnRenames matches each new column that declares a RenamedFrom
+// marker against the old schema, and returns the {oldName, newName} pairs that
+// are real renames.
+//
+// A marker whose old column is absent from the old schema is spent: the rename
+// already ran, and the schemas agree. It is ignored, not an error.
+//
+// A marker is rejected when it is ambiguous — when both the old and the new
+// name exist in the old schema, so applying the rename would destroy the
+// existing new-named column — or when two new columns claim the same old name.
+func resolveColumnRenames(old, new Table) ([][2]string, error) {
+	oldCols := indexColumns(old.Columns)
+	claimed := make(map[string]string)
+
+	var renames [][2]string
+	for _, nc := range new.Columns {
+		if nc.RenamedFrom == "" {
+			continue
+		}
+		if _, exists := oldCols[nc.RenamedFrom]; !exists {
+			continue // spent marker
+		}
+		if _, alsoExists := oldCols[nc.Name]; alsoExists {
+			return nil, fmt.Errorf(
+				"codegen: table %s: ambiguous rename: column %q says renamed_from=%q, but both %q and %q already exist; "+
+					"remove the marker, or drop one of the columns first",
+				old.Name, nc.Name, nc.RenamedFrom, nc.RenamedFrom, nc.Name)
+		}
+		if prev, dup := claimed[nc.RenamedFrom]; dup {
+			return nil, fmt.Errorf(
+				"codegen: table %s: columns %q and %q both declare renamed_from=%q; a column can be renamed to one name only",
+				old.Name, prev, nc.Name, nc.RenamedFrom)
+		}
+		claimed[nc.RenamedFrom] = nc.Name
+		renames = append(renames, [2]string{nc.RenamedFrom, nc.Name})
+	}
+	return renames, nil
 }
 
 // diffTable diffs the columns and indexes of a table that exists in both schemas.
-func diffTable(old, new Table, dialect string) (up, down []string) {
-	oldCols := indexColumns(old.Columns)
+func diffTable(old, new Table, dialect string) (up, down []string, err error) {
+	renames, err := resolveColumnRenames(old, new)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Emit the renames first, so every later statement can name the new column.
+	renamedOld := make(map[string]string, len(renames)) // old name -> new name
+	for _, r := range renames {
+		renamedOld[r[0]] = r[1]
+		up = append(up, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;",
+			quoteIdent(new.Name), quoteIdent(r[0]), quoteIdent(r[1])))
+		down = append(down, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s;",
+			quoteIdent(new.Name), quoteIdent(r[1]), quoteIdent(r[0])))
+	}
+
+	// Index the old columns under their new names, so a renamed column is
+	// "present in both" for the add/drop/modify passes below.
+	oldCols := make(map[string]Column, len(old.Columns))
+	for _, c := range old.Columns {
+		name := c.Name
+		if nn, renamed := renamedOld[name]; renamed {
+			name = nn
+		}
+		oldCols[name] = c
+	}
 	newCols := indexColumns(new.Columns)
+
+	// Modified columns (present in both). This pass runs first, ahead of the
+	// add and drop passes, because it decides whether the table needs a
+	// rebuild. The add and drop passes must know that: on the rebuild path the
+	// rebuild's own CREATE TABLE already expresses the complete target shape,
+	// so a separate ALTER ... ADD/DROP COLUMN is redundant on the up path and
+	// breaks the down path, where the reversed rebuild has already applied it.
+	// Its statements are appended below, in their original position.
+	var modUp, modDown []string
+	rebuild := false
+	for _, nc := range new.Columns {
+		oc, ok := oldCols[nc.Name]
+		if !ok {
+			continue
+		}
+		mu, md, needsRebuild := diffColumn(new.Name, oc, nc, dialect)
+		modUp = append(modUp, mu...)
+		modDown = append(modDown, md...)
+		rebuild = rebuild || needsRebuild
+	}
 
 	// Added columns (preserve new-table order).
 	for _, c := range new.Columns {
@@ -398,62 +556,95 @@ func diffTable(old, new Table, dialect string) (up, down []string) {
 			// Adding a NOT NULL column without a default fails on a non-empty
 			// table; surface this for the reviewer rather than failing silently.
 			if c.NotNull && c.Default == "" {
+				// This note matters more on the rebuild path, not less: the
+				// rebuild's INSERT copies only the shared columns, so a new
+				// NOT NULL column with no default is never populated and the
+				// rebuild fails on a non-empty table.
 				up = append(up, fmt.Sprintf(`-- NOTE: adding NOT NULL column %s to existing table %s; ensure the table is empty or add a DEFAULT / backfill before applying`,
 					quoteIdent(c.Name), quoteIdent(new.Name)))
+			}
+			if rebuild {
+				continue // the rebuild's CREATE TABLE already declares this column
 			}
 			up = append(up, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;", quoteIdent(new.Name), columnDefSQL(c, dialect)))
 			down = append(down, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", quoteIdent(new.Name), quoteIdent(c.Name)))
 		}
 	}
 
-	// Dropped columns (preserve old-table order).
-	for _, c := range old.Columns {
-		if _, ok := newCols[c.Name]; !ok {
-			up = append(up, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", quoteIdent(old.Name), quoteIdent(c.Name)))
-			down = append(down, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;", quoteIdent(old.Name), columnDefSQL(c, dialect)))
+	// Dropped columns (preserve old-table order). A renamed column is looked
+	// up by its new name — it is present in newCols under that name, so it is
+	// not dropped here; the rename statement above already handled it.
+	// On the rebuild path this pass is skipped: the rebuild's CREATE TABLE omits
+	// the dropped column, and the reversed rebuild restores it.
+	if !rebuild {
+		for _, c := range old.Columns {
+			name := c.Name
+			if nn, renamed := renamedOld[name]; renamed {
+				name = nn
+			}
+			if _, ok := newCols[name]; !ok {
+				up = append(up, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", quoteIdent(old.Name), quoteIdent(c.Name)))
+				down = append(down, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;", quoteIdent(old.Name), columnDefSQL(c, dialect)))
+			}
 		}
 	}
 
-	// Modified columns (present in both).
-	for _, nc := range new.Columns {
-		oc, ok := oldCols[nc.Name]
-		if !ok {
-			continue
+	up = append(up, modUp...)
+	down = append(down, modDown...)
+
+	if rebuild {
+		// SQLite cannot ALTER these properties in place. One rebuild carries
+		// every such change on this table, so two changed columns produce one
+		// rebuild rather than two.
+		//
+		// The rebuild runs AFTER the rename statements emitted above, so by then
+		// the live table already carries the new column names. Its source shape
+		// must therefore be the old table relabelled, or sharedColumnNames finds
+		// no match for a renamed column and silently drops its data.
+		source, err := relabelColumns(old, renamedOld)
+		if err != nil {
+			return nil, nil, err
 		}
-		mu, md := diffColumn(new.Name, oc, nc, dialect)
-		up = append(up, mu...)
-		down = append(down, md...)
+
+		// Append each direction as ONE element. DiffSchemas reverses the down
+		// slice element-wise; a rebuild spread across elements would execute
+		// backwards (RENAME before DROP before INSERT before CREATE).
+		up = append(up, strings.Join(sqliteRebuild(new, source), "\n"))
+		down = append(down, strings.Join(sqliteRebuild(source, new), "\n"))
 	}
 
-	// Index diffs.
-	oldIdx := indexIndexes(old.Indexes)
-	newIdx := indexIndexes(new.Indexes)
-	for _, idx := range new.Indexes {
-		if _, ok := oldIdx[idx.Name]; !ok {
-			up = append(up, strings.TrimRight(createIndexSQL(new.Name, idx), "\n"))
-			down = append(down, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
+	// Index diffs. A rebuild already recreated every index the new table
+	// declares, so these passes are skipped to avoid a duplicate CREATE INDEX.
+	if !rebuild {
+		oldIdx := indexIndexes(old.Indexes)
+		newIdx := indexIndexes(new.Indexes)
+		for _, idx := range new.Indexes {
+			if _, ok := oldIdx[idx.Name]; !ok {
+				up = append(up, strings.TrimRight(createIndexSQL(new.Name, idx), "\n"))
+				down = append(down, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
+			}
 		}
-	}
-	for _, idx := range old.Indexes {
-		if _, ok := newIdx[idx.Name]; !ok {
-			up = append(up, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
-			down = append(down, strings.TrimRight(createIndexSQL(old.Name, idx), "\n"))
+		for _, idx := range old.Indexes {
+			if _, ok := newIdx[idx.Name]; !ok {
+				up = append(up, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
+				down = append(down, strings.TrimRight(createIndexSQL(old.Name, idx), "\n"))
+			}
 		}
 	}
 
-	return up, down
+	return up, down, nil
 }
 
-// diffColumn emits ALTER statements for a column whose definition changed between
-// the old and new schema (type and/or NOT NULL). SQLite cannot perform these
-// alterations, so a WARNING comment is emitted instead of a silent skip.
-func diffColumn(table string, old, new Column, dialect string) (up, down []string) {
+// diffColumn emits ALTER statements for a column whose definition changed
+// between the old and new schema (type, NOT NULL, DEFAULT, or CHECK).
+//
+// SQLite cannot ALTER any of these properties in place. For that dialect the
+// function emits no SQL and reports needsRebuild instead, so that diffTable can
+// emit one table rebuild covering every changed column on the table.
+func diffColumn(table string, old, new Column, dialect string) (up, down []string, needsRebuild bool) {
 	if old.Type != new.Type {
 		if dialect == "sqlite" {
-			up = append(up, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN TYPE for %s.%s (%s -> %s); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), old.Type, new.Type))
-			down = append(down, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN TYPE for %s.%s (%s -> %s); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), new.Type, old.Type))
+			needsRebuild = true
 		} else {
 			up = append(up, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s;",
 				quoteIdent(table), quoteIdent(new.Name), new.Type))
@@ -464,10 +655,7 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 
 	if old.NotNull != new.NotNull {
 		if dialect == "sqlite" {
-			up = append(up, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN NOT NULL for %s.%s; recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name)))
-			down = append(down, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN NOT NULL for %s.%s; recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name)))
+			needsRebuild = true
 		} else {
 			upClause, downClause := "SET NOT NULL", "DROP NOT NULL"
 			if !new.NotNull {
@@ -482,10 +670,7 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 
 	if old.Default != new.Default {
 		if dialect == "sqlite" {
-			up = append(up, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN DEFAULT for %s.%s (%q -> %q); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), old.Default, new.Default))
-			down = append(down, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN DEFAULT for %s.%s (%q -> %q); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), new.Default, old.Default))
+			needsRebuild = true
 		} else {
 			up = append(up, alterDefaultSQL(table, new.Name, new.Default))
 			down = append(down, alterDefaultSQL(table, old.Name, old.Default))
@@ -494,10 +679,7 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 
 	if old.Check != new.Check {
 		if dialect == "sqlite" {
-			up = append(up, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER CHECK constraint on %s.%s (%q -> %q); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), old.Check, new.Check))
-			down = append(down, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER CHECK constraint on %s.%s (%q -> %q); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), new.Check, old.Check))
+			needsRebuild = true
 		} else {
 			name := checkConstraintName(table, new.Name)
 			// UP: drop the old constraint (if any), add the new one (if any).
@@ -521,7 +703,7 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 		}
 	}
 
-	return up, down
+	return up, down, needsRebuild
 }
 
 // diffEnumValues emits migration SQL for added/removed values of a Postgres

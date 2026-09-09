@@ -5,6 +5,34 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- Explicit rename markers for migration diffing. `db:"new,renamed_from=old"` on
+  a field emits `ALTER TABLE ... RENAME COLUMN`; `renamed_from=` on the embedded
+  `drel.Model` field emits `ALTER TABLE ... RENAME TO`. A spent marker is
+  ignored; an ambiguous one is rejected.
+- An explicit table name, set by the `table=` option on the embedded
+  `drel.Model` field's `db` tag.
+
+### Fixed
+
+- SQLite column changes to type, nullability, default, and CHECK now emit a real
+  table rebuild instead of a `-- WARNING` comment. Several changes to one table
+  produce one rebuild. The rebuild uses `PRAGMA defer_foreign_keys`, because
+  `PRAGMA foreign_keys` is a no-op inside the runner's transaction.
+
+### Changed
+
+- The `db` tag on the embedded `drel.Model` field is now parsed. It was ignored
+  before. An unrecognised option there fails code generation instead of passing
+  unnoticed.
+- Internal only, no effect on drel users: `codegen.DiffSchemas` (in
+  `internal/codegen`, not importable outside this module) now returns
+  `(upSQL, downSQL string, err error)`. A rename marker can be ambiguous, and
+  an ambiguous rename must fail rather than guess.
+
 ## [0.7.1] - 2026-09-09
 
 ### Fixed

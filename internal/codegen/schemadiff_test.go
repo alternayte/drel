@@ -21,7 +21,8 @@ func TestDiffSchemas_NoChange(t *testing.T) {
 			Column{Name: "name", Type: "text", NotNull: true},
 		),
 	}}
-	up, down := DiffSchemas(s, s, "postgres")
+	up, down, err := DiffSchemas(s, s, "postgres")
+	require.NoError(t, err)
 	assert.Equal(t, "", up)
 	assert.Equal(t, "", down)
 }
@@ -41,7 +42,8 @@ func TestDiffSchemas_AddTable(t *testing.T) {
 			Indexes: []Index{{Name: "idx_posts_title", Columns: []string{"title"}}},
 		},
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `CREATE TABLE "posts"`)
 	assert.Contains(t, up, `"title" text NOT NULL`)
 	assert.Contains(t, up, `CREATE INDEX "idx_posts_title" ON "posts" ("title");`)
@@ -58,7 +60,8 @@ func TestDiffSchemas_DropTable(t *testing.T) {
 	newS := Schema{Tables: []Table{
 		pgTable("users", Column{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true}),
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `DROP TABLE IF EXISTS "posts";`)
 	assert.Contains(t, down, `CREATE TABLE "posts"`)
 	assert.Contains(t, down, `"title" text NOT NULL`)
@@ -74,7 +77,8 @@ func TestDiffSchemas_AddColumn_Nullable(t *testing.T) {
 			Column{Name: "bio", Type: "text"},
 		),
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `ALTER TABLE "users" ADD COLUMN "bio" text;`)
 	assert.NotContains(t, up, `"bio" text NOT NULL`)
 	assert.Contains(t, down, `ALTER TABLE "users" DROP COLUMN "bio";`)
@@ -90,7 +94,8 @@ func TestDiffSchemas_AddColumn_NotNull(t *testing.T) {
 			Column{Name: "email", Type: "text", NotNull: true},
 		),
 	}}
-	up, _ := DiffSchemas(old, newS, "postgres")
+	up, _, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `ALTER TABLE "users" ADD COLUMN "email" text NOT NULL;`)
 }
 
@@ -104,7 +109,8 @@ func TestDiffSchemas_DropColumn(t *testing.T) {
 	newS := Schema{Tables: []Table{
 		pgTable("users", Column{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true}),
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `ALTER TABLE "users" DROP COLUMN "legacy";`)
 	assert.Contains(t, down, `ALTER TABLE "users" ADD COLUMN "legacy" text;`)
 }
@@ -122,12 +128,13 @@ func TestDiffSchemas_TypeChange_Postgres(t *testing.T) {
 			Column{Name: "age", Type: "bigint", NotNull: true},
 		),
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `ALTER TABLE "users" ALTER COLUMN "age" TYPE bigint;`)
 	assert.Contains(t, down, `ALTER TABLE "users" ALTER COLUMN "age" TYPE integer;`)
 }
 
-func TestDiffSchemas_TypeChange_SQLiteWarning(t *testing.T) {
+func TestDiffSchemas_TypeChange_SQLiteRebuild(t *testing.T) {
 	old := Schema{Tables: []Table{
 		pgTable("users",
 			Column{Name: "id", Type: "INTEGER PRIMARY KEY AUTOINCREMENT", NotNull: true, PK: true},
@@ -140,8 +147,16 @@ func TestDiffSchemas_TypeChange_SQLiteWarning(t *testing.T) {
 			Column{Name: "age", Type: "TEXT", NotNull: true},
 		),
 	}}
-	up, _ := DiffSchemas(old, newS, "sqlite")
-	assert.Contains(t, up, `-- WARNING: SQLite cannot ALTER COLUMN TYPE for "users"."age" (INTEGER -> TEXT)`)
+	up, _, err := DiffSchemas(old, newS, "sqlite")
+	require.NoError(t, err)
+	// SQLite cannot ALTER a column type in place, so the diff rebuilds the table.
+	assert.NotContains(t, up, "WARNING")
+	assert.Contains(t, up, "PRAGMA defer_foreign_keys = ON;")
+	assert.Contains(t, up, `CREATE TABLE "users__drel_new" (`)
+	assert.Contains(t, up, `"age" TEXT NOT NULL`)
+	assert.Contains(t, up, `INSERT INTO "users__drel_new" ("id", "age") SELECT "id", "age" FROM "users";`)
+	assert.Contains(t, up, `DROP TABLE "users";`)
+	assert.Contains(t, up, `ALTER TABLE "users__drel_new" RENAME TO "users";`)
 }
 
 func TestDiffSchemas_NotNullChange_Postgres(t *testing.T) {
@@ -157,12 +172,13 @@ func TestDiffSchemas_NotNullChange_Postgres(t *testing.T) {
 			Column{Name: "bio", Type: "text", NotNull: true},
 		),
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `ALTER TABLE "users" ALTER COLUMN "bio" SET NOT NULL;`)
 	assert.Contains(t, down, `ALTER TABLE "users" ALTER COLUMN "bio" DROP NOT NULL;`)
 }
 
-func TestDiffSchemas_NotNullChange_SQLiteWarning(t *testing.T) {
+func TestDiffSchemas_NotNullChange_SQLiteRebuild(t *testing.T) {
 	old := Schema{Tables: []Table{
 		pgTable("users",
 			Column{Name: "id", Type: "INTEGER PRIMARY KEY AUTOINCREMENT", NotNull: true, PK: true},
@@ -175,8 +191,15 @@ func TestDiffSchemas_NotNullChange_SQLiteWarning(t *testing.T) {
 			Column{Name: "bio", Type: "TEXT", NotNull: true},
 		),
 	}}
-	up, _ := DiffSchemas(old, newS, "sqlite")
-	assert.Contains(t, up, `-- WARNING: SQLite cannot ALTER COLUMN NOT NULL for "users"."bio"`)
+	up, _, err := DiffSchemas(old, newS, "sqlite")
+	require.NoError(t, err)
+	// SQLite cannot ALTER a column's nullability in place, so the diff rebuilds
+	// the table with the column declared NOT NULL.
+	assert.NotContains(t, up, "WARNING")
+	assert.Contains(t, up, `CREATE TABLE "users__drel_new" (`)
+	assert.Contains(t, up, `"bio" TEXT NOT NULL`)
+	assert.Contains(t, up, `INSERT INTO "users__drel_new" ("id", "bio") SELECT "id", "bio" FROM "users";`)
+	assert.Contains(t, up, `ALTER TABLE "users__drel_new" RENAME TO "users";`)
 }
 
 func TestDiffSchemas_AddIndex(t *testing.T) {
@@ -196,7 +219,8 @@ func TestDiffSchemas_AddIndex(t *testing.T) {
 			Indexes: []Index{{Name: "idx_users_email", Columns: []string{"email"}}},
 		},
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `CREATE INDEX "idx_users_email" ON "users" ("email");`)
 	assert.Contains(t, down, `DROP INDEX "idx_users_email";`)
 }
@@ -218,7 +242,8 @@ func TestDiffSchemas_DropIndex(t *testing.T) {
 			Column{Name: "email", Type: "text", NotNull: true},
 		),
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `DROP INDEX "idx_users_email";`)
 	assert.Contains(t, down, `CREATE INDEX "idx_users_email" ON "users" ("email");`)
 }
@@ -240,7 +265,8 @@ func TestDiffSchemas_UniqueIndex(t *testing.T) {
 			Indexes: []Index{{Name: "uq_users_email", Columns: []string{"email"}, Unique: true}},
 		},
 	}}
-	up, _ := DiffSchemas(old, newS, "postgres")
+	up, _, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `CREATE UNIQUE INDEX "uq_users_email" ON "users" ("email");`)
 }
 
@@ -263,7 +289,8 @@ func TestDiffSchemas_CompositeIndex(t *testing.T) {
 			Indexes: []Index{{Name: "idx_name", Columns: []string{"first", "last"}}},
 		},
 	}}
-	up, _ := DiffSchemas(old, newS, "postgres")
+	up, _, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `CREATE INDEX "idx_name" ON "users" ("first", "last");`)
 }
 
@@ -280,7 +307,8 @@ func TestDiffSchemas_AddEnum_Postgres(t *testing.T) {
 			),
 		},
 	}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `CREATE TYPE "role" AS ENUM ('admin', 'user');`)
 	assert.Contains(t, up, `ALTER TABLE "users" ADD COLUMN "role" "role" NOT NULL;`)
 	assert.Contains(t, down, `DROP TYPE "role";`)
@@ -296,7 +324,8 @@ func TestDiffSchemas_AddEnum_SQLiteNoCreateType(t *testing.T) {
 			Column{Name: "role", Type: "TEXT", NotNull: true, Check: `"role" IN ('admin', 'user')`},
 		),
 	}}
-	up, _ := DiffSchemas(old, newS, "sqlite")
+	up, _, err := DiffSchemas(old, newS, "sqlite")
+	require.NoError(t, err)
 	assert.NotContains(t, up, "CREATE TYPE")
 	assert.Contains(t, up, `ALTER TABLE "users" ADD COLUMN "role" TEXT NOT NULL CHECK("role" IN ('admin', 'user'));`)
 }
@@ -389,21 +418,26 @@ func TestDiffSchemas_DefaultAddDrop(t *testing.T) {
 	}
 
 	// Postgres: adding a default emits SET DEFAULT; the down emits DROP DEFAULT.
-	up, down := DiffSchemas(
+	up, down, err := DiffSchemas(
 		BuildSchema([]ModelInfo{noDefault}, "postgres"),
 		BuildSchema([]ModelInfo{withDefault}, "postgres"),
 		"postgres",
 	)
+	require.NoError(t, err)
 	assert.Contains(t, up, `ALTER TABLE "users" ALTER COLUMN "role" SET DEFAULT 'user';`)
 	assert.Contains(t, down, `ALTER TABLE "users" ALTER COLUMN "role" DROP DEFAULT;`)
 
-	// SQLite cannot ALTER DEFAULT; it surfaces a WARNING rather than silently skipping.
-	upLite, _ := DiffSchemas(
+	// SQLite cannot ALTER DEFAULT; the diff rebuilds the table with the new default.
+	upLite, _, err := DiffSchemas(
 		BuildSchema([]ModelInfo{noDefault}, "sqlite"),
 		BuildSchema([]ModelInfo{withDefault}, "sqlite"),
 		"sqlite",
 	)
-	assert.Contains(t, upLite, "WARNING: SQLite cannot ALTER COLUMN DEFAULT")
+	require.NoError(t, err)
+	assert.NotContains(t, upLite, "WARNING")
+	assert.Contains(t, upLite, `CREATE TABLE "users__drel_new" (`)
+	assert.Contains(t, upLite, `DEFAULT 'user'`)
+	assert.Contains(t, upLite, `ALTER TABLE "users__drel_new" RENAME TO "users";`)
 }
 
 func TestDiffSchemas_GrowStringEnum_Postgres(t *testing.T) {
@@ -425,7 +459,8 @@ func TestDiffSchemas_GrowStringEnum_Postgres(t *testing.T) {
 			),
 		},
 	}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `ALTER TYPE "role" ADD VALUE 'moderator';`)
 	// down cannot trivially drop an enum value — must warn, not silently no-op.
 	assert.Contains(t, down, "WARNING")
@@ -441,7 +476,8 @@ func TestDiffSchemas_ShrinkStringEnum_Postgres_Warns(t *testing.T) {
 		Enums:  []EnumDef{{Name: "role", Values: []string{"admin", "user"}, BaseType: "string"}},
 		Tables: []Table{pgTable("users", Column{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true})},
 	}
-	up, _ := DiffSchemas(old, newS, "postgres")
+	up, _, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, "WARNING")
 	assert.Contains(t, up, "guest")
 }
@@ -451,7 +487,8 @@ func TestDiffSchemas_GrowStringEnum_SQLiteNoAlterType(t *testing.T) {
 	// s.Enums for SQLite, so growing one yields no ALTER TYPE here.
 	old := Schema{Tables: []Table{pgTable("users", Column{Name: "id", Type: "INTEGER PRIMARY KEY AUTOINCREMENT", NotNull: true, PK: true})}}
 	newS := Schema{Tables: []Table{pgTable("users", Column{Name: "id", Type: "INTEGER PRIMARY KEY AUTOINCREMENT", NotNull: true, PK: true})}}
-	up, _ := DiffSchemas(old, newS, "sqlite")
+	up, _, err := DiffSchemas(old, newS, "sqlite")
+	require.NoError(t, err)
 	assert.NotContains(t, up, "ALTER TYPE")
 }
 
@@ -470,7 +507,8 @@ func TestDiffSchemas_GrowIntEnum_ProducesMigration(t *testing.T) {
 	}}
 
 	for _, dialect := range []string{"postgres", "sqlite"} {
-		up, _ := DiffSchemas(BuildSchema(v1, dialect), BuildSchema(v2, dialect), dialect)
+		up, _, err := DiffSchemas(BuildSchema(v1, dialect), BuildSchema(v2, dialect), dialect)
+		require.NoError(t, err)
 		assert.NotEqual(t, "", up, "growing an int enum must not produce an empty migration on %s", dialect)
 		// The migration references the changed CHECK value set.
 		assert.Contains(t, up, "2", "migration should reference the newly added enum value on %s", dialect)
@@ -490,7 +528,8 @@ func TestDiffSchemas_CheckChange_Postgres(t *testing.T) {
 			Column{Name: "price", Type: "integer", NotNull: true, Check: "price >= 1"},
 		),
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 
 	assert.Contains(t, up, `ALTER TABLE "products" DROP CONSTRAINT IF EXISTS "chk_products_price";`)
 	assert.Contains(t, up, `ALTER TABLE "products" ADD CONSTRAINT "chk_products_price" CHECK (price >= 1);`)
@@ -514,12 +553,13 @@ func TestDiffSchemas_AddCheckToExistingColumn_Postgres(t *testing.T) {
 			Column{Name: "price", Type: "integer", NotNull: true, Check: "price > 0"},
 		),
 	}}
-	up, down := DiffSchemas(old, newS, "postgres")
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
 	assert.Contains(t, up, `ALTER TABLE "products" ADD CONSTRAINT "chk_products_price" CHECK (price > 0);`)
 	assert.Contains(t, down, `ALTER TABLE "products" DROP CONSTRAINT IF EXISTS "chk_products_price";`)
 }
 
-func TestDiffSchemas_CheckChange_SQLite_WarnsOnly(t *testing.T) {
+func TestDiffSchemas_CheckChange_SQLiteRebuild(t *testing.T) {
 	old := Schema{Tables: []Table{
 		{Name: "products", Columns: []Column{
 			{Name: "id", Type: "INTEGER PRIMARY KEY", NotNull: true, PK: true},
@@ -532,9 +572,15 @@ func TestDiffSchemas_CheckChange_SQLite_WarnsOnly(t *testing.T) {
 			{Name: "price", Type: "INTEGER", NotNull: true, Check: "price >= 1"},
 		}},
 	}}
-	up, _ := DiffSchemas(old, newS, "sqlite")
-	assert.Contains(t, up, "WARNING: SQLite cannot ALTER CHECK")
+	up, _, err := DiffSchemas(old, newS, "sqlite")
+	require.NoError(t, err)
+	// SQLite keeps CHECK inline, so changing one requires a table rebuild.
+	assert.NotContains(t, up, "WARNING")
 	assert.NotContains(t, up, "ADD CONSTRAINT")
+	assert.Contains(t, up, `CREATE TABLE "products__drel_new" (`)
+	assert.Contains(t, up, "CHECK(price >= 1)")
+	assert.Contains(t, up, `INSERT INTO "products__drel_new" ("id", "price") SELECT "id", "price" FROM "products";`)
+	assert.Contains(t, up, `ALTER TABLE "products__drel_new" RENAME TO "products";`)
 }
 
 func TestDiffSchemas_DropToEmpty_CoversPivotsAndEnums(t *testing.T) {
@@ -555,7 +601,8 @@ func TestDiffSchemas_DropToEmpty_CoversPivotsAndEnums(t *testing.T) {
 	}
 
 	// up = drop everything; down = recreate everything.
-	up, down := DiffSchemas(desired, Schema{}, "postgres")
+	up, down, err := DiffSchemas(desired, Schema{}, "postgres")
+	require.NoError(t, err)
 
 	// The first-migration DOWN is this "up" (drop) direction.
 	assert.Contains(t, up, `DROP TABLE IF EXISTS "users_roles";`)

@@ -254,11 +254,20 @@ func runMigrateNew(parsed parsedCmd) {
 		// one so pivots and enum types are covered (GenerateDropSchema drops only
 		// model tables, leaking pivots and enums on rollback).
 		upSQL = codegen.GenerateSchema(models, dialect)
-		dropUp, _ := codegen.DiffSchemas(desired, codegen.Schema{}, dialect)
+		dropUp, _, dErr := codegen.DiffSchemas(desired, codegen.Schema{}, dialect)
+		if dErr != nil {
+			fmt.Fprintf(os.Stderr, "drel migrate new: %v\n", dErr)
+			os.Exit(1)
+		}
 		downSQL = dropUp
 	} else {
 		// Incremental migration: structured diff of snapshot against desired schema.
-		upSQL, downSQL = codegen.DiffSchemas(old, desired, dialect)
+		var dErr error
+		upSQL, downSQL, dErr = codegen.DiffSchemas(old, desired, dialect)
+		if dErr != nil {
+			fmt.Fprintf(os.Stderr, "drel migrate new: %v\n", dErr)
+			os.Exit(1)
+		}
 		if upSQL == "" && downSQL == "" {
 			fmt.Println("drel: no schema changes detected")
 			return

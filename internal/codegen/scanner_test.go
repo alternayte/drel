@@ -642,3 +642,80 @@ func TestParseDBTag_TypeOverride_Scanner(t *testing.T) {
 	assert.Equal(t, "payload", col)
 	assert.Equal(t, "jsonb", opts.typ)
 }
+
+// scanSource writes src as a single-file package and scans it, requiring
+// success. It exists because most scanner tests build multi-file modules via
+// setupTestModule directly; this is a convenience for single-source cases.
+func scanSource(t *testing.T, src string) []ModelInfo {
+	t.Helper()
+	dir := setupTestModule(t, map[string]string{
+		"models/model.go": src,
+	})
+	models, err := ScanPackages([]string{"./models"}, dir)
+	require.NoError(t, err)
+	return models
+}
+
+func TestParseDBTag_RenamedFrom(t *testing.T) {
+	col, opts, err := parseDBTag(`db:"email_address,renamed_from=email"`)
+	require.NoError(t, err)
+	assert.Equal(t, "email_address", col)
+	assert.Equal(t, "email", opts.renamedFrom)
+}
+
+func TestParseDBTag_RenamedFromAlongsideOtherOptions(t *testing.T) {
+	col, opts, err := parseDBTag(`db:"email_address,unique,renamed_from=email,check=email_address <> ''"`)
+	require.NoError(t, err)
+	assert.Equal(t, "email_address", col)
+	assert.True(t, opts.unique)
+	assert.Equal(t, "email", opts.renamedFrom)
+	assert.Equal(t, "email_address <> ''", opts.check)
+}
+
+func TestParseDBTag_TableOption(t *testing.T) {
+	col, opts, err := parseDBTag(`db:"table=orders,renamed_from=purchases"`)
+	require.NoError(t, err)
+	assert.Equal(t, "table=orders", col,
+		"the first position is the column name; table= in it is not an option here")
+	_ = opts
+}
+
+func TestParseDBTag_EmptyRenamedFromIsRejected(t *testing.T) {
+	_, _, err := parseDBTag(`db:"email,renamed_from="`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "renamed_from")
+}
+
+func TestScan_FieldCarriesItsRenameMarker(t *testing.T) {
+	models := scanSource(t, `
+		package m
+		import "github.com/alternayte/drel"
+		type User struct {
+			drel.Model[int]
+			EmailAddress string `+"`"+`db:"email_address,renamed_from=email"`+"`"+`
+		}
+	`)
+	require.Len(t, models, 1)
+	var f FieldInfo
+	for _, x := range models[0].Fields {
+		if x.Name == "EmailAddress" {
+			f = x
+		}
+	}
+	assert.Equal(t, "email_address", f.ColumnName)
+	assert.Equal(t, "email", f.RenamedFrom)
+}
+
+func TestScan_ModelCarriesItsTableRenameMarker(t *testing.T) {
+	models := scanSource(t, `
+		package m
+		import "github.com/alternayte/drel"
+		type Order struct {
+			drel.Model[int] `+"`"+`db:"table=orders,renamed_from=purchases"`+"`"+`
+			Total int
+		}
+	`)
+	require.Len(t, models, 1)
+	assert.Equal(t, "orders", models[0].TableName)
+	assert.Equal(t, "purchases", models[0].RenamedFrom)
+}
