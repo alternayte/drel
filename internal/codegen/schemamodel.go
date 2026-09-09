@@ -123,29 +123,52 @@ func buildEnums(models []ModelInfo) []EnumDef {
 // buildTable builds the structured Table for a single model, including PK,
 // user columns, trait columns, and indexes derived from db tag options.
 func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
+	// m.Key is populated by the scanner for every real model. This fallback
+	// exists only for hand-constructed ModelInfo values in tests that predate
+	// the scanner change and never set Key; it is not a defence against a real
+	// scanner failure.
+	if len(m.Key) == 0 {
+		m.Key = []KeyColumn{{ColumnName: "id", GoType: m.PKType}}
+	}
+
 	t := Table{Name: m.TableName}
 	t.RenamedFrom = m.RenamedFrom
 
-	// Primary key column.
-	pk := Column{Name: "id", PK: true, NotNull: true}
-	if dialect == "sqlite" {
-		switch m.PKType {
-		case "int", "int8", "int16", "int32", "int64":
-			pk.Type = "INTEGER PRIMARY KEY AUTOINCREMENT"
-		default:
-			pk.Type = GoTypeToSQL(m.PKType, dialect) + " PRIMARY KEY"
+	// Primary key columns. A single key column carries "PRIMARY KEY" inline, and
+	// keeps auto-increment for integer keys. A composite key declares the key at
+	// table level instead, and never auto-increments.
+	if m.IsCompositeKey() {
+		for _, kc := range m.Key {
+			t.Columns = append(t.Columns, Column{
+				Name:    kc.ColumnName,
+				Type:    GoTypeToSQL(kc.GoType, dialect),
+				NotNull: true,
+				PK:      true,
+			})
+			t.PrimaryKey = append(t.PrimaryKey, kc.ColumnName)
 		}
 	} else {
-		switch m.PKType {
-		case "int", "int32":
-			pk.Type = "SERIAL PRIMARY KEY"
-		case "int64":
-			pk.Type = "BIGSERIAL PRIMARY KEY"
-		default:
-			pk.Type = GoTypeToSQL(m.PKType, dialect) + " PRIMARY KEY"
+		kc := m.Key[0]
+		pk := Column{Name: kc.ColumnName, PK: true, NotNull: true}
+		if dialect == "sqlite" {
+			switch m.PKType {
+			case "int", "int8", "int16", "int32", "int64":
+				pk.Type = "INTEGER PRIMARY KEY AUTOINCREMENT"
+			default:
+				pk.Type = GoTypeToSQL(m.PKType, dialect) + " PRIMARY KEY"
+			}
+		} else {
+			switch m.PKType {
+			case "int", "int32":
+				pk.Type = "SERIAL PRIMARY KEY"
+			case "int64":
+				pk.Type = "BIGSERIAL PRIMARY KEY"
+			default:
+				pk.Type = GoTypeToSQL(m.PKType, dialect) + " PRIMARY KEY"
+			}
 		}
+		t.Columns = append(t.Columns, pk)
 	}
-	t.Columns = append(t.Columns, pk)
 
 	// User-defined columns.
 	for _, f := range columnFields(m.Fields) {

@@ -144,9 +144,11 @@ func createTableSQL(t Table, dialect string) string {
 func columnDefSQL(c Column, dialect string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("%s %s", quoteIdent(c.Name), c.Type))
-	// The PK type string already embeds "PRIMARY KEY" (and NOT NULL semantics),
-	// so do not append an additional NOT NULL for PK columns.
-	if c.NotNull && !c.PK {
+	// A single-column PK's type string already embeds "PRIMARY KEY" (and NOT
+	// NULL semantics), so do not append a redundant NOT NULL for it. A
+	// composite key column's type does not embed "PRIMARY KEY" (the key is
+	// declared at table level instead), so it still needs an explicit NOT NULL.
+	if c.NotNull && !strings.Contains(c.Type, "PRIMARY KEY") {
 		b.WriteString(" NOT NULL")
 	}
 	if c.Check != "" && dialect == "sqlite" {

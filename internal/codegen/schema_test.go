@@ -659,3 +659,49 @@ func columnsByName(cols []Column) map[string]Column {
 	}
 	return m
 }
+
+func TestGenerateCreateTable_CompositeKeyPostgres(t *testing.T) {
+	m := ModelInfo{
+		Name:      "OrderLine",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int"},
+		},
+		KeyIsStruct: true,
+		Fields:      []FieldInfo{{Name: "Qty", GoType: "int", ColumnName: "qty", IsExported: true}},
+	}
+	sql := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, sql, `"order_id" integer NOT NULL`)
+	assert.Contains(t, sql, `"line_no" integer NOT NULL`)
+	assert.Contains(t, sql, `PRIMARY KEY ("order_id", "line_no")`)
+	assert.NotContains(t, sql, "SERIAL")
+}
+
+func TestGenerateCreateTable_CompositeKeySQLite(t *testing.T) {
+	m := ModelInfo{
+		Name:      "OrderLine",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	sql := GenerateCreateTable(m, nil, "sqlite")
+	assert.Contains(t, sql, `PRIMARY KEY ("order_id", "line_no")`)
+	assert.NotContains(t, sql, "AUTOINCREMENT")
+}
+
+func TestGenerateCreateTable_NamedScalarKeyUsesTheTaggedColumnName(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Country",
+		TableName: "countries",
+		PKType:    "string",
+		Key:       []KeyColumn{{ColumnName: "code", GoType: "string"}},
+	}
+	sql := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, sql, `"code" text PRIMARY KEY`)
+}
