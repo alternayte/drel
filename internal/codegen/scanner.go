@@ -207,7 +207,11 @@ func buildKeyColumns(pk pkTypeInfo, modelName, ownerPkgPath string) ([]KeyColumn
 		if col != "" {
 			name = col
 		}
-		return []KeyColumn{{ColumnName: name, GoType: pk.Display}}, false, nil
+		return []KeyColumn{{
+			ColumnName:       name,
+			GoType:           pk.Display,
+			UnderlyingGoType: keyNormalizeKind(pk.Type),
+		}}, false, nil
 	}
 
 	var cols []KeyColumn
@@ -237,16 +241,42 @@ func buildKeyColumns(pk pkTypeInfo, modelName, ownerPkgPath string) ([]KeyColumn
 			fieldPkg = ""
 		}
 		cols = append(cols, KeyColumn{
-			FieldName:  f.Name(),
-			ColumnName: col,
-			GoType:     localTypeName(f.Type()),
-			PkgPath:    fieldPkg,
+			FieldName:        f.Name(),
+			ColumnName:       col,
+			GoType:           localTypeName(f.Type()),
+			PkgPath:          fieldPkg,
+			UnderlyingGoType: keyNormalizeKind(f.Type()),
 		})
 	}
 	if len(cols) == 0 {
 		return nil, false, fmt.Errorf("codegen: model %s: composite key type %s has no fields", modelName, pk.Display)
 	}
 	return cols, true, nil
+}
+
+// keyNormalizeKind classifies a key type by how a raw driver value for it must
+// be converted: "uuid.UUID", "string", or "int" for every signed integer
+// width. It returns "" for a type the emitter cannot classify, which falls
+// back to the display type. It mirrors isSupportedKeyFieldType.
+func keyNormalizeKind(t types.Type) string {
+	if n, ok := t.(*types.Named); ok {
+		if o := n.Obj(); o != nil && o.Pkg() != nil &&
+			o.Pkg().Path() == "github.com/google/uuid" && o.Name() == "UUID" {
+			return "uuid.UUID"
+		}
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	if !ok {
+		return ""
+	}
+	switch b.Kind() {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
+		// NormalizeIntKey yields a Go int whatever the column's width.
+		return "int"
+	case types.String:
+		return "string"
+	}
+	return ""
 }
 
 // isSupportedKeyFieldType reports whether a composite key field's type can be a

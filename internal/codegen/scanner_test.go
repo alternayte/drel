@@ -910,3 +910,57 @@ type Membership struct {
 	assert.Equal(t, "TenantID", ms.Key[0].GoType)
 	assert.Equal(t, "", ms.Key[1].PkgPath, "a builtin key field has no package")
 }
+
+func TestScan_KeyColumnsRecordTheirNormalizationKind(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type LineNo int
+type SKU string
+
+type EntryKey struct {
+	LineNo LineNo `+"`"+`db:"line_no"`+"`"+`
+	SKU    SKU    `+"`"+`db:"sku"`+"`"+`
+	Big    int64  `+"`"+`db:"big"`+"`"+`
+}
+
+type Entry struct {
+	drel.Model[EntryKey]
+	Note string
+}
+`)
+	var e ModelInfo
+	for _, m := range models {
+		if m.Name == "Entry" {
+			e = m
+		}
+	}
+	require.Len(t, e.Key, 3)
+	assert.Equal(t, "LineNo", e.Key[0].GoType)
+	assert.Equal(t, "int", e.Key[0].UnderlyingGoType)
+	assert.Equal(t, "SKU", e.Key[1].GoType)
+	assert.Equal(t, "string", e.Key[1].UnderlyingGoType)
+	assert.Equal(t, "int64", e.Key[2].GoType)
+	assert.Equal(t, "int", e.Key[2].UnderlyingGoType,
+		"every signed integer width normalizes through the same int rule")
+}
+
+func TestScan_ScalarNamedIntKeyRecordsItsKind(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type AccountID int
+
+type Account struct {
+	drel.Model[AccountID]
+	Name string
+}
+`)
+	require.Len(t, models, 1)
+	require.Len(t, models[0].Key, 1)
+	assert.Equal(t, "int", models[0].Key[0].UnderlyingGoType)
+}

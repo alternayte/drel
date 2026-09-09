@@ -820,6 +820,8 @@ func TestEmit_CompositeKeyEmitsPKColumnsAndKeyValues(t *testing.T) {
 	assert.Contains(t, src, "if len(vals) != 2 {")
 	assert.Contains(t, src, "drel.NormalizeIntKey(vals[0]).(int)")
 	assert.Contains(t, src, "drel.NormalizeIntKey(vals[1]).(int)")
+	_, perr := parser.ParseFile(token.NewFileSet(), "order_line_drel.go", src, parser.AllErrors)
+	require.NoError(t, perr)
 }
 
 func TestEmit_ScalarKeyEmitsANilKeyValues(t *testing.T) {
@@ -834,6 +836,7 @@ func TestEmit_ScalarKeyEmitsANilKeyValues(t *testing.T) {
 	src := EmitModelFile(m)
 	assert.Contains(t, src, `PKColumns: []string{"id"},`)
 	assert.NotContains(t, src, "KeyValues:")
+	assert.NotContains(t, src, "KeyValues(", "a scalar key emits no splitter function either")
 	assert.NotContains(t, src, "vals, ok := v.([]any)")
 }
 
@@ -857,5 +860,52 @@ func TestEmit_CompositeKeyWithUUIDColumnImportsUUID(t *testing.T) {
 		"the assertion must use the aliased, package-qualified type")
 	assert.Contains(t, src, "drel.NormalizeIntKey(vals[1]).(int)")
 	_, perr := parser.ParseFile(token.NewFileSet(), "membership_drel.go", src, parser.AllErrors)
+	require.NoError(t, perr)
+}
+
+func TestEmit_CompositeKeyWithNamedFieldTypesConvertsRatherThanAsserts(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Entry",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "entries",
+		PKType:    "EntryKey",
+		Key: []KeyColumn{
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "LineNo", UnderlyingGoType: "int"},
+			{FieldName: "SKU", ColumnName: "sku", GoType: "SKU", UnderlyingGoType: "string"},
+			{FieldName: "Big", ColumnName: "big", GoType: "int64", UnderlyingGoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	src := EmitModelFile(m)
+	// The helper returns a Go int, so the assertion must be to int and the
+	// named type reached by conversion.
+	assert.Contains(t, src, "f0, ok := drel.NormalizeIntKey(vals[0]).(int)")
+	assert.Contains(t, src, "k.LineNo = LineNo(f0)")
+	assert.Contains(t, src, "f1, ok := vals[1].(string)")
+	assert.Contains(t, src, "k.SKU = SKU(f1)")
+	assert.Contains(t, src, "f2, ok := drel.NormalizeIntKey(vals[2]).(int)")
+	assert.Contains(t, src, "k.Big = int64(f2)")
+	assert.NotContains(t, src, ".(LineNo)")
+	assert.NotContains(t, src, ".(SKU)")
+	_, perr := parser.ParseFile(token.NewFileSet(), "entry_drel.go", src, parser.AllErrors)
+	require.NoError(t, perr)
+}
+
+func TestEmit_ScalarNamedIntKeyIsConvertedBack(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Account",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "accounts",
+		PKType:    "AccountID",
+		Key:       []KeyColumn{{ColumnName: "id", GoType: "AccountID", UnderlyingGoType: "int"}},
+	}
+	src := EmitModelFile(m)
+	assert.Contains(t, src, "drel.NormalizeIntKey(v).(int)",
+		"a named int PK must still take the integer rule")
+	assert.Contains(t, src, "return AccountID(")
+	assert.NotContains(t, src, "\treturn v\n}")
+	_, perr := parser.ParseFile(token.NewFileSet(), "account_drel.go", src, parser.AllErrors)
 	require.NoError(t, perr)
 }

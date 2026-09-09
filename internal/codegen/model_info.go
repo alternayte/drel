@@ -34,6 +34,11 @@ type KeyColumn struct {
 	// PkgPath is the import path of the field's type. It is empty for a
 	// builtin type and for a type declared in the model's own package.
 	PkgPath string
+	// UnderlyingGoType is the normalization kind of the column: "int" for any
+	// signed integer, "string", or "uuid.UUID". It selects the conversion
+	// rule and names the type the conversion helper returns, which is not
+	// always GoType: a named type or a sized integer needs a conversion back.
+	UnderlyingGoType string
 }
 
 // PKColumns returns the primary key column names in key order.

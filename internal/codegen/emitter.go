@@ -742,13 +742,14 @@ func emitKeyValues(b *strings.Builder, m ModelInfo, lower string) {
 }
 
 // normalizeKeyExpr returns the expression that converts one raw driver value
-// into the canonical Go type goType. It is the single source of the per-type
-// conversion rule, shared by the scalar and the struct key normalizers.
-func normalizeKeyExpr(goType, valExpr string) string {
+// into a value of kind, which must be "uuid.UUID", "string", or "int". It is
+// the single source of the per-type conversion rule, shared by the scalar and
+// the struct key normalizers.
+func normalizeKeyExpr(kind, valExpr string) string {
 	switch {
-	case goType == "uuid.UUID":
+	case kind == "uuid.UUID":
 		return fmt.Sprintf("drel.NormalizeUUIDKey(%s)", valExpr)
-	case isAppAssignedPK(goType):
+	case isAppAssignedPK(kind):
 		// string or other app-assigned key: identity.
 		return valExpr
 	default:
@@ -771,13 +772,38 @@ func keyColumnDisplayType(kc KeyColumn, aliases map[string]string) string {
 	return alias + "." + kc.GoType
 }
 
-// keyColumnRuleType returns the canonical type name used to pick the column's
-// conversion rule. It is independent of the file's import alias.
-func keyColumnRuleType(kc KeyColumn) string {
+// normalizeKind returns the normalization kind for a key column: the rule that
+// converts a raw driver value, and the type that rule yields. It falls back to
+// the display type for a column the scanner did not classify.
+func normalizeKind(kc KeyColumn) string {
+	if kc.UnderlyingGoType != "" {
+		return kc.UnderlyingGoType
+	}
 	if kc.PkgPath == "github.com/google/uuid" && kc.GoType == "UUID" {
 		return "uuid.UUID"
 	}
 	return kc.GoType
+}
+
+// normalizeKeyParts returns the expression that converts valExpr, the type to
+// assert that expression to, and the type to convert the asserted value into
+// before it is stored. convert is empty when no conversion is needed.
+//
+// drel.NormalizeIntKey yields a Go int whatever the column's width, and a
+// named type is never the dynamic type of a driver value, so the assertion is
+// always to the kind and the declared type is reached by conversion.
+func normalizeKeyParts(kc KeyColumn, aliases map[string]string, valExpr string) (expr, assertType, convert string) {
+	kind := normalizeKind(kc)
+	display := keyColumnDisplayType(kc, aliases)
+	expr = normalizeKeyExpr(kind, valExpr)
+	if kind == "uuid.UUID" {
+		// The aliased name is the only spelling of this type in the file.
+		return expr, display, ""
+	}
+	if display == kind {
+		return expr, kind, ""
+	}
+	return expr, kind, display
 }
 
 func emitNormalizeKey(b *strings.Builder, m ModelInfo, lower string, aliases map[string]string) {
@@ -785,15 +811,31 @@ func emitNormalizeKey(b *strings.Builder, m ModelInfo, lower string, aliases map
 		emitStructNormalizeKey(b, m, lower, aliases)
 		return
 	}
+	kc := scalarKeyColumn(m, aliases)
+	expr, assertType, convert := normalizeKeyParts(kc, aliases, "v")
 	b.WriteString(fmt.Sprintf("func %sNormalizeKey(v any) any {\n", lower))
-	b.WriteString(fmt.Sprintf("\treturn %s\n", normalizeKeyExpr(m.PKType, "v")))
+	if convert == "" {
+		b.WriteString(fmt.Sprintf("\treturn %s\n", expr))
+		b.WriteString("}\n\n")
+		return
+	}
+	b.WriteString(fmt.Sprintf("\tx, ok := %s.(%s)\n", expr, assertType))
+	b.WriteString("\tif !ok {\n\t\treturn v\n\t}\n")
+	b.WriteString(fmt.Sprintf("\treturn %s(x)\n", convert))
 	b.WriteString("}\n\n")
 }
 
-// emitStructNormalizeKey emits a normalizer that rebuilds a struct key from a
-// []any of per-column driver values. Each column is converted with the same
-// rule the scalar normalizer uses for that column's Go type. Any input of an
-// unexpected shape, or a column that does not convert, is returned unchanged.
+// scalarKeyColumn describes a scalar primary key as a single key column. The
+// key type is spelled with the model's own PK display name, which carries the
+// import alias, so the column's own PkgPath is not used.
+func scalarKeyColumn(m ModelInfo, aliases map[string]string) KeyColumn {
+	kc := KeyColumn{GoType: resolvePKDisplay(m, aliases)}
+	if len(m.Key) == 1 {
+		kc.UnderlyingGoType = m.Key[0].UnderlyingGoType
+	}
+	return kc
+}
+
 func emitStructNormalizeKey(b *strings.Builder, m ModelInfo, lower string, aliases map[string]string) {
 	b.WriteString(fmt.Sprintf("// %sNormalizeKey converts per-column driver values into a canonical %s,\n", lower, m.PKType))
 	b.WriteString("// so a key read back from the driver compares equal to PKValue.\n")
@@ -803,10 +845,14 @@ func emitStructNormalizeKey(b *strings.Builder, m ModelInfo, lower string, alias
 	b.WriteString(fmt.Sprintf("\tif len(vals) != %d {\n\t\treturn v\n\t}\n", len(m.Key)))
 	b.WriteString(fmt.Sprintf("\tvar k %s\n", m.PKType))
 	for i, kc := range m.Key {
-		expr := normalizeKeyExpr(keyColumnRuleType(kc), fmt.Sprintf("vals[%d]", i))
-		b.WriteString(fmt.Sprintf("\tf%d, ok := %s.(%s)\n", i, expr, keyColumnDisplayType(kc, aliases)))
+		expr, assertType, convert := normalizeKeyParts(kc, aliases, fmt.Sprintf("vals[%d]", i))
+		b.WriteString(fmt.Sprintf("\tf%d, ok := %s.(%s)\n", i, expr, assertType))
 		b.WriteString("\tif !ok {\n\t\treturn v\n\t}\n")
-		b.WriteString(fmt.Sprintf("\tk.%s = f%d\n", kc.FieldName, i))
+		if convert == "" {
+			b.WriteString(fmt.Sprintf("\tk.%s = f%d\n", kc.FieldName, i))
+			continue
+		}
+		b.WriteString(fmt.Sprintf("\tk.%s = %s(f%d)\n", kc.FieldName, convert, i))
 	}
 	b.WriteString("\treturn k\n}\n\n")
 }
