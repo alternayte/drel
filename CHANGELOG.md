@@ -61,6 +61,39 @@ type Position struct{ XactID, GlobalPos int64 }
 On SQLite `xact_id` is always 0, because SQLite serialises writers and the
 insert order is already the commit order.
 
+- **Migrations that belong to a module.** A `modules:` block in `drel.yaml`
+  names each feature slice with its packages and its migration directory, so a
+  slice owns its models and its migrations and a person can delete the directory
+  to remove the feature. A config that lists `packages:` is one module named
+  `default`, so an existing project keeps working and its generated code does
+  not change.
+  - `drel generate --module posts` and `drel migrate new --module posts <name>`
+    act on one slice. `migrate new` diffs that slice's own snapshot. A config
+    with more than one module requires the flag, because a migration belongs to
+    exactly one slice.
+  - Generation writes a `migrations_drel.go` with `//go:embed *.sql` into each
+    module directory that holds SQL, and `migrate new` refreshes it. A directory
+    with no SQL gets no file, because a `//go:embed` pattern that matches
+    nothing does not compile.
+  - `Engine.ApplyMigrationsFS(ctx, users.FS, posts.FS)` merges the sets in
+    version order, so the migrations run in the order they were written and not
+    in the order the arguments appear. A version that appears in two modules is
+    an error naming both files.
+  - `migrate up`, `down`, `status`, `lint` and `check` merge every module
+    directory.
+  - A model may reference a table of another module. `migrate new` warns and
+    names the owning module, because the merged migrations apply in timestamp
+    order.
+- **Slice-scoped repositories.** The generated `DB` gains `db.Modules.<Slice>`
+  and `db.Tx(ctx).Modules.<Slice>`, holding only that slice's repositories while
+  the transaction stays shared. The flat fields are unchanged.
+  - The sets live in a holder rather than in methods. A module named `posts`
+    that holds the model `Post` would otherwise give `DB` a field `Posts` and a
+    method `Posts()`, which Go rejects.
+  - Models in more than one package already aggregated into one `DB` struct, so
+    that part of the design document needed no change. The `value-objects`
+    example has done it since before this release.
+
 ### Fixed
 
 - **A booting replica could crash on the migration table.** `Up` and `Down`

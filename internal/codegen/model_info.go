@@ -13,6 +13,9 @@ type ModelInfo struct {
 	HasVersioned  bool
 	HasAudit      bool
 	Dir           string // filesystem directory of the package
+	// Module is the feature slice this model belongs to. It is empty for a
+	// config that lists packages instead of modules.
+	Module string
 }
 
 type FieldInfo struct {

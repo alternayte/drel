@@ -135,6 +135,11 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   batch under a lease, so more than one replica can poll one table, and it
   keeps the messages of one `PartitionKey` in order. A failed message retries,
   and it moves to the dead-letter state after the attempt limit.
+- **Feature slices** -- a `modules:` block in `drel.yaml` gives each slice its
+  own models and its own migrations, embedded with `//go:embed` and merged by
+  `Engine.ApplyMigrationsFS` in version order. The generated `DB` gains
+  `db.Modules.<Slice>` and `db.Tx(ctx).Modules.<Slice>`, so a slice reaches only
+  its own repositories while the transaction stays shared.
 - **Test harness** -- `dreltest.WithRollback` runs one test inside one
   transaction and rolls it back. The transaction travels in the context, so the
   code under test joins it. On Postgres the tests can run in parallel against

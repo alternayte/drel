@@ -3,8 +3,36 @@ package codegen
 import (
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 )
+
+// hasModules reports whether any model belongs to a declared feature slice.
+func hasModules(models []ModelInfo) bool {
+	for _, m := range models {
+		if m.Module != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// modulesOf groups the models by module name and returns the names in order.
+func modulesOf(models []ModelInfo) ([]string, map[string][]ModelInfo) {
+	byModule := make(map[string][]ModelInfo)
+	for _, m := range models {
+		if m.Module == "" {
+			continue
+		}
+		byModule[m.Module] = append(byModule[m.Module], m)
+	}
+	names := make([]string, 0, len(byModule))
+	for name := range byModule {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, byModule
+}
 
 // EmitDBFile generates the aggregated DB struct file that wires up all
 // repositories. dbPkgName is the Go package name for the output file (e.g. "db").
@@ -40,6 +68,9 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 		fieldName := pluralize(m.Name)
 		b.WriteString(fmt.Sprintf("\t%s *%s.%sRepository\n", fieldName, alias, m.Name))
 	}
+	if hasModules(models) {
+		b.WriteString("\tModules Modules\n")
+	}
 	b.WriteString("}\n\n")
 
 	// Open function
@@ -53,6 +84,20 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 		fieldName := pluralize(m.Name)
 		b.WriteString(fmt.Sprintf("\t\t%s: &%s.%sRepository{Repository: drel.NewRepository(engine, %s.%sMeta)},\n", fieldName, alias, m.Name, alias, m.Name))
 	}
+	if hasModules(models) {
+		names, byModule := modulesOf(models)
+		b.WriteString("\t\tModules: Modules{\n")
+		for _, name := range names {
+			b.WriteString(fmt.Sprintf("\t\t\t%s: %sRepos{\n", exportName(name), exportName(name)))
+			for _, m := range byModule[name] {
+				alias := aliases[m.PkgPath]
+				b.WriteString(fmt.Sprintf("\t\t\t\t%s: &%s.%sRepository{Repository: drel.NewRepository(engine, %s.%sMeta)},\n",
+					pluralize(m.Name), alias, m.Name, alias, m.Name))
+			}
+			b.WriteString("\t\t\t},\n")
+		}
+		b.WriteString("\t\t},\n")
+	}
 	b.WriteString("\t}, nil\n")
 	b.WriteString("}\n\n")
 
@@ -65,6 +110,9 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 		alias := aliases[m.PkgPath]
 		fieldName := pluralize(m.Name)
 		b.WriteString(fmt.Sprintf("\t%s *%s.Tx%sRepository\n", fieldName, alias, m.Name))
+	}
+	if hasModules(models) {
+		b.WriteString("\tModules TxModules\n")
 	}
 	b.WriteString("}\n\n")
 
@@ -81,6 +129,12 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")
+
+	// Module sets: a slice reaches only its own repositories while the
+	// transaction stays shared. They live in a holder rather than in methods,
+	// because a module named "posts" that holds the model Post would give DB a
+	// field Posts and a method Posts(), which Go rejects.
+	emitModuleSets(&b, models, aliases)
 
 	// WithTx forwarder.
 	b.WriteString("// WithTx runs fn inside a transaction and puts that transaction in the\n")
@@ -167,6 +221,63 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 	}
 
 	return b.String()
+}
+
+// emitModuleSets writes the per-module repository sets and the two holders. It
+// writes nothing when no model carries a module, which is the case for a config
+// that lists packages instead of modules.
+func emitModuleSets(b *strings.Builder, models []ModelInfo, aliases map[string]string) {
+	byModule := make(map[string][]ModelInfo)
+	for _, m := range models {
+		if m.Module == "" {
+			continue
+		}
+		byModule[m.Module] = append(byModule[m.Module], m)
+	}
+	if len(byModule) == 0 {
+		return
+	}
+
+	names := make([]string, 0, len(byModule))
+	for name := range byModule {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		set := byModule[name]
+		typeName := exportName(name)
+
+		b.WriteString(fmt.Sprintf("\n// %sRepos holds the untracked repositories of the %q module.\n", typeName, name))
+		b.WriteString(fmt.Sprintf("type %sRepos struct {\n", typeName))
+		for _, m := range set {
+			b.WriteString(fmt.Sprintf("\t%s *%s.%sRepository\n", pluralize(m.Name), aliases[m.PkgPath], m.Name))
+		}
+		b.WriteString("}\n")
+
+		b.WriteString(fmt.Sprintf("\n// %sTxRepos holds the tracked repositories of the %q module.\n", typeName, name))
+		b.WriteString(fmt.Sprintf("type %sTxRepos struct {\n", typeName))
+		for _, m := range set {
+			b.WriteString(fmt.Sprintf("\t%s *%s.Tx%sRepository\n", pluralize(m.Name), aliases[m.PkgPath], m.Name))
+		}
+		b.WriteString("}\n")
+	}
+
+	b.WriteString("\n// Modules groups the untracked repositories by feature slice, so a slice\n")
+	b.WriteString("// reaches only its own models.\n")
+	b.WriteString("type Modules struct {\n")
+	for _, name := range names {
+		b.WriteString(fmt.Sprintf("\t%s %sRepos\n", exportName(name), exportName(name)))
+	}
+	b.WriteString("}\n")
+
+	b.WriteString("\n// TxModules groups the tracked repositories by feature slice. Every set is\n")
+	b.WriteString("// bound to the same transaction.\n")
+	b.WriteString("type TxModules struct {\n")
+	for _, name := range names {
+		b.WriteString(fmt.Sprintf("\t%s %sTxRepos\n", exportName(name), exportName(name)))
+	}
+	b.WriteString("}\n")
 }
 
 // relationType maps rel tag type strings to the drel.RelationType constant names.

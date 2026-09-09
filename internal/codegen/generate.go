@@ -119,6 +119,12 @@ func GenerateModule(configPath, module string) error {
 		return fmt.Errorf("codegen: no models found in packages %v", cfg.AllPackages())
 	}
 
+	// Tag each model with the feature slice that owns it, so the DB struct can
+	// group the repositories. A config without modules leaves the tag empty.
+	if len(cfg.Modules) > 0 {
+		assignModules(models, cfg.ModuleList(), cfgDir)
+	}
+
 	// Validate the whole model set before touching disk: duplicate DB field
 	// names, unresolved relation targets, and column-less models all fail here
 	// so a bad input never leaves a half-generated tree.

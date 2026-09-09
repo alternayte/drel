@@ -138,3 +138,55 @@ func TestGenerateModule_OneModuleOnlyWritesItsEmbed(t *testing.T) {
 	_, err = os.Stat(filepath.Join(dir, "internal/features/posts/migrations/migrations_drel.go"))
 	assert.True(t, os.IsNotExist(err), "another module must be left alone")
 }
+
+// TestGenerateModule_EmitsSliceScopedRepositories proves item 9: a slice
+// reaches only its own repositories while the transaction stays shared, and the
+// generated code compiles.
+func TestGenerateModule_EmitsSliceScopedRepositories(t *testing.T) {
+	dir := twoModuleProject(t)
+
+	// A program that uses the slice-scoped sets on both sides.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(`package main
+
+import (
+	"context"
+	"fmt"
+
+	"testmod/internal/db"
+	"testmod/internal/features/posts"
+)
+
+func main() {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		panic(err)
+	}
+	defer database.Close()
+
+	// Untracked, scoped to one slice.
+	_ = database.Modules.Posts.Posts
+
+	// Tracked, scoped to one slice, sharing the transaction.
+	_ = database.WithTx(context.Background(), func(ctx context.Context) error {
+		repo := database.Tx(ctx).Modules.Posts.Posts
+		repo.Add(&posts.Post{})
+		return nil
+	})
+	fmt.Println("ok")
+}
+`), 0644))
+
+	require.NoError(t, GenerateModule(filepath.Join(dir, "drel.yaml"), ""))
+
+	dbFile, err := os.ReadFile(filepath.Join(dir, "internal/db/drel_gen.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(dbFile), "type Modules struct {")
+	assert.Contains(t, string(dbFile), "type TxModules struct {")
+	assert.Contains(t, string(dbFile), "Modules Modules")
+	assert.Contains(t, string(dbFile), "Modules TxModules")
+
+	build := exec.Command("go", "build", "./...")
+	build.Dir = dir
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "the slice-scoped sets must compile: %s", string(out))
+}
