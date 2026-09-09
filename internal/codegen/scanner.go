@@ -94,7 +94,7 @@ func scanPackage(pkg *packages.Package) ([]ModelInfo, error) {
 				mi.Name, mi.PKType)
 		}
 
-		keyCols, keyIsStruct, kErr := buildKeyColumns(pkInfo, tn.Name())
+		keyCols, keyIsStruct, kErr := buildKeyColumns(pkInfo, tn.Name(), pkg.PkgPath)
 		if kErr != nil {
 			return nil, kErr
 		}
@@ -196,7 +196,7 @@ func findModelEmbed(st *types.Struct) (info pkTypeInfo, found bool) {
 // the first position of the embedded field's db tag and defaulting to "id". A
 // struct type argument yields one column per exported field, named by that
 // field's own db tag and defaulting to the snake-case field name.
-func buildKeyColumns(pk pkTypeInfo, modelName string) ([]KeyColumn, bool, error) {
+func buildKeyColumns(pk pkTypeInfo, modelName, ownerPkgPath string) ([]KeyColumn, bool, error) {
 	kst, isStruct := pk.Type.Underlying().(*types.Struct)
 	if !isStruct {
 		name := "id"
@@ -230,10 +230,17 @@ func buildKeyColumns(pk pkTypeInfo, modelName string) ([]KeyColumn, bool, error)
 		if col == "" {
 			col = toSnakeCase(f.Name())
 		}
+		// Mirror extractFields: record the field type's package unless it is
+		// the model's own package, so the emitter can import and alias it.
+		fieldPkg := typePkgPath(f.Type())
+		if fieldPkg == ownerPkgPath {
+			fieldPkg = ""
+		}
 		cols = append(cols, KeyColumn{
 			FieldName:  f.Name(),
 			ColumnName: col,
 			GoType:     localTypeName(f.Type()),
+			PkgPath:    fieldPkg,
 		})
 	}
 	if len(cols) == 0 {

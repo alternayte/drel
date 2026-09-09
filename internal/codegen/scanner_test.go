@@ -871,3 +871,42 @@ type Row struct {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no fields")
 }
+
+func TestScan_StructKeyFieldRecordsItsTypePackage(t *testing.T) {
+	dir := setupTestModule(t, map[string]string{
+		"ids/ids.go": `package ids
+
+type TenantID string
+`,
+		"models/model.go": `package m
+
+import (
+	"github.com/alternayte/drel"
+	"testmod/ids"
+)
+
+type MembershipKey struct {
+	TenantID ids.TenantID ` + "`" + `db:"tenant_id"` + "`" + `
+	Seq      int          ` + "`" + `db:"seq"` + "`" + `
+}
+
+type Membership struct {
+	drel.Model[MembershipKey]
+	Role string
+}
+`,
+	})
+	models, err := ScanPackages([]string{"./models"}, dir)
+	require.NoError(t, err)
+	var ms ModelInfo
+	for _, m := range models {
+		if m.Name == "Membership" {
+			ms = m
+		}
+	}
+	require.Len(t, ms.Key, 2)
+	assert.Equal(t, "testmod/ids", ms.Key[0].PkgPath,
+		"a key field from another package must record that package")
+	assert.Equal(t, "TenantID", ms.Key[0].GoType)
+	assert.Equal(t, "", ms.Key[1].PkgPath, "a builtin key field has no package")
+}

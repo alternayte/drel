@@ -836,3 +836,26 @@ func TestEmit_ScalarKeyEmitsANilKeyValues(t *testing.T) {
 	assert.NotContains(t, src, "KeyValues:")
 	assert.NotContains(t, src, "vals, ok := v.([]any)")
 }
+
+func TestEmit_CompositeKeyWithUUIDColumnImportsUUID(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Membership",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "memberships",
+		PKType:    "MembershipKey",
+		Key: []KeyColumn{
+			{FieldName: "TenantID", ColumnName: "tenant_id", GoType: "UUID", PkgPath: "github.com/google/uuid"},
+			{FieldName: "Seq", ColumnName: "seq", GoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	src := EmitModelFile(m)
+	assert.Contains(t, src, `uuid "github.com/google/uuid"`,
+		"a uuid key column must pull in its own import")
+	assert.Contains(t, src, "drel.NormalizeUUIDKey(vals[0]).(uuid.UUID)",
+		"the assertion must use the aliased, package-qualified type")
+	assert.Contains(t, src, "drel.NormalizeIntKey(vals[1]).(int)")
+	_, perr := parser.ParseFile(token.NewFileSet(), "membership_drel.go", src, parser.AllErrors)
+	require.NoError(t, perr)
+}

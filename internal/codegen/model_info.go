@@ -30,7 +30,10 @@ type ModelInfo struct {
 type KeyColumn struct {
 	FieldName  string // exported Go field on the key struct; empty for a scalar key
 	ColumnName string // database column name
-	GoType     string // display Go type, e.g. "int" or "uuid.UUID"
+	GoType     string // local Go type name, e.g. "int" or "UUID"
+	// PkgPath is the import path of the field's type. It is empty for a
+	// builtin type and for a type declared in the model's own package.
+	PkgPath string
 }
 
 // PKColumns returns the primary key column names in key order.
