@@ -49,9 +49,29 @@ func ResolveModuleRoot(startDir string) string {
 // After a successful write, truly stale files that no longer back any scanned
 // model are permanently removed.
 func Generate(configPath string) error {
+	return GenerateModule(configPath, "")
+}
+
+// GenerateModule generates the code of one module of the config. An empty
+// module name covers every module.
+//
+// The model files and the aggregated DB struct always cover every module,
+// because the DB struct reaches all of the slices and a model file is the same
+// whichever module asked for it. The module name selects which migration embeds
+// are written.
+func GenerateModule(configPath, module string) error {
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return err
+	}
+
+	targets := cfg.ModuleList()
+	if module != "" {
+		one, err := cfg.Module(module)
+		if err != nil {
+			return err
+		}
+		targets = []ModuleConfig{one}
 	}
 
 	// Resolve the config file's directory as the working directory for scanning.
@@ -68,7 +88,7 @@ func Generate(configPath string) error {
 	// so that stale generated code (referencing deleted types) does not cause
 	// package-load errors in the subsequent ScanPackages call.
 	// We save the contents first so they can be restored if any later step fails.
-	saved, err := removeStaleInDirsWithBackup(cfg.Packages, cfgDir)
+	saved, err := removeStaleInDirsWithBackup(cfg.AllPackages(), cfgDir)
 	if err != nil {
 		return err
 	}
@@ -90,13 +110,13 @@ func Generate(configPath string) error {
 	// module root on its own from the working directory, so cfgDir is the
 	// correct base -- NOT ResolveModuleRoot(cfgDir), which would resolve
 	// ./models relative to the repo root when the config lives in a subdir.
-	models, err := ScanPackages(cfg.Packages, cfgDir)
+	models, err := ScanPackages(cfg.AllPackages(), cfgDir)
 	if err != nil {
 		return err
 	}
 
 	if len(models) == 0 {
-		return fmt.Errorf("codegen: no models found in packages %v", cfg.Packages)
+		return fmt.Errorf("codegen: no models found in packages %v", cfg.AllPackages())
 	}
 
 	// Validate the whole model set before touching disk: duplicate DB field
@@ -134,6 +154,20 @@ func Generate(configPath string) error {
 		return fmt.Errorf("codegen: format db file %s: %w", dbPath, err)
 	}
 	files = append(files, emitted{path: dbPath, content: dbContent})
+
+	// --- Migration embeds: one for each target module that holds SQL files. ---
+	for _, m := range targets {
+		dir := m.Migrations
+		if dir == "" {
+			continue
+		}
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(cfgDir, dir)
+		}
+		if _, err := WriteMigrationsEmbed(dir, m.Name); err != nil {
+			return err
+		}
+	}
 
 	// --- Write phase: every file emitted and formatted successfully. ---
 	// Signal success so the deferred restore does not put back stale files.
