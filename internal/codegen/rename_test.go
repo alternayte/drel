@@ -124,12 +124,21 @@ func TestDiffSchemas_TableAndColumnRenameTogetherAreOrdered(t *testing.T) {
 		},
 	}}}
 
-	up, _, err := DiffSchemas(old, new, "postgres")
+	up, down, err := DiffSchemas(old, new, "postgres")
 	require.NoError(t, err)
 	tableAt := indexOf(up, "RENAME TO")
 	colAt := indexOf(up, "RENAME COLUMN")
 	assert.Less(t, tableAt, colAt, "the table rename must precede the column rename")
 	assert.Contains(t, up, `ALTER TABLE "orders" RENAME COLUMN "total" TO "total_cents";`)
+
+	// The down migration must undo the two in the opposite order: rename the
+	// column back while the table still carries its new name, and only then
+	// rename the table back. The reverse order fails on apply, because the
+	// table is no longer called "orders" by the time the column statement runs.
+	downColAt := indexOf(down, "RENAME COLUMN")
+	downTableAt := indexOf(down, "RENAME TO")
+	assert.Less(t, downColAt, downTableAt, "the column rename-back must precede the table rename-back")
+	assert.Contains(t, down, `ALTER TABLE "orders" RENAME COLUMN "total_cents" TO "total";`)
 }
 
 func TestDiffSchemas_StaleTableMarkerIsIgnored(t *testing.T) {
