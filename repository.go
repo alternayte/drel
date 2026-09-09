@@ -8,9 +8,15 @@ import (
 
 // ModelMeta describes the database mapping for a model type T.
 type ModelMeta[T any] struct {
-	Table         string
-	Columns       []string
-	PKColumn      string
+	Table    string
+	Columns  []string
+	PKColumn string
+	// PKColumns lists every primary key column, in key order. When empty the
+	// single PKColumn is used. Generated code always sets it.
+	PKColumns []string
+	// KeyValues splits a primary key value into one value per PKColumns entry,
+	// in the same order. When nil the key is a single value.
+	KeyValues     func(key any) []any
 	Scan          func(Row) (*T, error)
 	Snapshot      func(*T) any
 	Diff          func(*T, any) []FieldChange
@@ -41,9 +47,11 @@ type ModelMeta[T any] struct {
 // ToMetaBase converts a typed ModelMeta[T] to a type-erased ModelMetaBase.
 func ToMetaBase[T any](meta *ModelMeta[T]) *ModelMetaBase {
 	base := &ModelMetaBase{
-		Table:    meta.Table,
-		Columns:  meta.Columns,
-		PKColumn: meta.PKColumn,
+		Table:     meta.Table,
+		Columns:   meta.Columns,
+		PKColumn:  meta.PKColumn,
+		PKColumns: pkColumnsOf(meta.PKColumn, meta.PKColumns),
+		KeyValues: meta.KeyValues,
 		PKValue: func(entity any) any {
 			return meta.PKValue(entity.(*T))
 		},

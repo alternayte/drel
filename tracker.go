@@ -29,6 +29,8 @@ type ModelMetaBase struct {
 	Table          string
 	Columns        []string
 	PKColumn       string
+	PKColumns      []string
+	KeyValues      func(key any) []any
 	Snapshot       func(entity any) any
 	Diff           func(entity any, snapshot any) []FieldChange
 	PKValue        func(entity any) any
