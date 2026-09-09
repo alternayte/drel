@@ -1,13 +1,16 @@
 package codegen
 
 type ModelInfo struct {
-	Name          string
-	PkgPath       string
-	PkgName       string
-	PKType        string // display type for generated code (e.g., "int", "uuid.UUID")
-	PKTypeFull    string // fully qualified (e.g., "github.com/google/uuid.UUID")
-	PKTypePkg     string // import path for external PK types (empty for primitives)
-	TableName     string
+	Name       string
+	PkgPath    string
+	PkgName    string
+	PKType     string // display type for generated code (e.g., "int", "uuid.UUID")
+	PKTypeFull string // fully qualified (e.g., "github.com/google/uuid.UUID")
+	PKTypePkg  string // import path for external PK types (empty for primitives)
+	TableName  string
+	// RenamedFrom, when set, is this table's previous name. The migration
+	// differ turns it into an ALTER TABLE ... RENAME TO.
+	RenamedFrom   string
 	Fields        []FieldInfo
 	HasSoftDelete bool
 	HasVersioned  bool
@@ -19,9 +22,13 @@ type ModelInfo struct {
 }
 
 type FieldInfo struct {
-	Name             string
-	GoType           string
-	ColumnName       string
+	Name       string
+	GoType     string
+	ColumnName string
+	// RenamedFrom, when set, is this column's previous name. The migration
+	// differ turns it into an ALTER TABLE ... RENAME COLUMN rather than a drop
+	// and an add.
+	RenamedFrom      string
 	IsExported       bool
 	RelTag           string
 	Relation         *RelationFieldInfo
