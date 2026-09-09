@@ -25,6 +25,9 @@ minor versions may contain breaking changes.
 
 ### Changed
 
+- The `db` tag on the embedded `drel.Model` field is now parsed. It was ignored
+  before. An unrecognised option there fails code generation instead of passing
+  unnoticed.
 - Internal only, no effect on drel users: `codegen.DiffSchemas` (in
   `internal/codegen`, not importable outside this module) now returns
   `(upSQL, downSQL string, err error)`. A rename marker can be ambiguous, and

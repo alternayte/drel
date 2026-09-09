@@ -79,21 +79,66 @@ func sharedColumnNames(target, source Table) []string {
 	return out
 }
 
-// relabelColumns returns a copy of t whose column names are mapped through
-// renames (old name -> new name). It describes the table's shape after the
-// RENAME COLUMN statements have run, which is what a rebuild's INSERT..SELECT
-// must read from.
-func relabelColumns(t Table, renames map[string]string) Table {
+// relabelColumns returns a copy of t whose column names, index columns, and
+// primary key entries are mapped through renames (old name -> new name). It
+// describes the table's shape after the RENAME COLUMN statements have run.
+//
+// The result is used in BOTH rebuild roles, so every column reference it holds
+// must be relabelled, not only Column.Name. In the up direction it is the
+// rebuild's source, where only the column names are read. In the down direction
+// diffTable passes the same value as the rebuild's TARGET, where createTableSQL
+// and createIndexSQL emit its primary key and its index columns verbatim. A
+// reference left under the old name produces DDL that fails with "no such
+// column".
+//
+// Column.Check is free-form SQL and cannot be relabelled safely, so a renamed
+// column that carries one is rejected with an actionable error instead.
+func relabelColumns(t Table, renames map[string]string) (Table, error) {
 	if len(renames) == 0 {
-		return t
+		return t, nil
 	}
 	out := t
+
 	out.Columns = make([]Column, len(t.Columns))
 	copy(out.Columns, t.Columns)
 	for i := range out.Columns {
-		if nn, ok := renames[out.Columns[i].Name]; ok {
-			out.Columns[i].Name = nn
+		nn, ok := renames[out.Columns[i].Name]
+		if !ok {
+			continue
 		}
+		if out.Columns[i].Check != "" {
+			return Table{}, fmt.Errorf("table %q: column %q is renamed to %q and also carries a CHECK constraint (%s); SQLite must rebuild the table for this change and the CHECK cannot be rewritten safely. Split the change into two migrations: rename the column in one, then change the column in the next",
+				t.Name, out.Columns[i].Name, nn, out.Columns[i].Check)
+		}
+		out.Columns[i].Name = nn
+	}
+
+	if len(t.Indexes) > 0 {
+		out.Indexes = make([]Index, len(t.Indexes))
+		copy(out.Indexes, t.Indexes)
+		for i := range out.Indexes {
+			out.Indexes[i].Columns = relabelNames(t.Indexes[i].Columns, renames)
+		}
+	}
+	out.PrimaryKey = relabelNames(t.PrimaryKey, renames)
+
+	return out, nil
+}
+
+// relabelNames returns a fresh slice with each name mapped through renames.
+// It never mutates the input slice: the caller's Table is shared with the
+// snapshot and must stay untouched.
+func relabelNames(names []string, renames map[string]string) []string {
+	if names == nil {
+		return nil
+	}
+	out := make([]string, len(names))
+	for i, n := range names {
+		if nn, ok := renames[n]; ok {
+			out[i] = nn
+			continue
+		}
+		out[i] = n
 	}
 	return out
 }

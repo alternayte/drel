@@ -291,11 +291,15 @@ func GenerateDropSchema(models []ModelInfo) string {
 //   - dropped tables: DROP TABLE / down recreate
 //   - per-table column add/drop, type changes, NOT NULL changes
 //   - per-table index add/drop
+//   - table and column renames declared with a renamed_from marker
+//   - SQLite table rebuilds for the changes SQLite cannot ALTER in place
 //
-// SQLite cannot ALTER COLUMN TYPE or SET/DROP NOT NULL; those changes are emitted
-// as clearly-marked WARNING comments rather than silently skipped. A column
-// declared with a renamed_from marker emits RENAME COLUMN instead of a drop
-// and an add; an ambiguous marker is rejected with an error rather than guessed.
+// A table or a column declared with a renamed_from marker emits RENAME instead
+// of a drop and an add; an ambiguous marker is rejected with an error rather
+// than guessed. SQLite cannot ALTER a column's type, nullability, default, or
+// CHECK in place, so those changes are emitted as a full table rebuild (create
+// a scratch table, copy the rows, drop the original, rename, recreate the
+// indexes) rather than as a warning comment or a silent skip.
 func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string, err error) {
 	var up, down []string
 
@@ -597,7 +601,10 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 		// the live table already carries the new column names. Its source shape
 		// must therefore be the old table relabelled, or sharedColumnNames finds
 		// no match for a renamed column and silently drops its data.
-		source := relabelColumns(old, renamedOld)
+		source, err := relabelColumns(old, renamedOld)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		// Append each direction as ONE element. DiffSchemas reverses the down
 		// slice element-wise; a rebuild spread across elements would execute

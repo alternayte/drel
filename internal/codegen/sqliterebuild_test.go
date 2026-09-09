@@ -239,3 +239,144 @@ func TestDiffTable_RebuildStillNotesAnAddedNotNullColumn(t *testing.T) {
 	require.NotEqual(t, -1, pragmaAt)
 	assert.Less(t, noteAt, pragmaAt, "the note must precede the rebuild it warns about")
 }
+
+// assertNoUnknownColumnRefs fails when sql names any column outside allowed.
+// It is a coarse guard: it looks only at the quoted identifiers that follow a
+// column position, so it catches the "no such column" class of defect that a
+// half-relabelled table produces.
+func assertNoUnknownColumnRefs(t *testing.T, sql string, forbidden ...string) {
+	t.Helper()
+	for _, f := range forbidden {
+		assert.NotContains(t, sql, `"`+f+`"`,
+			"the statement names a column that does not exist in the table it targets")
+	}
+}
+
+func TestDiffTable_RenameAndRebuildRelabelsTheIndexColumns(t *testing.T) {
+	old := Table{
+		Name:    "notes",
+		Columns: []Column{{Name: "id", Type: "INTEGER", PK: true}, {Name: "body", Type: "TEXT"}},
+		Indexes: []Index{{Name: "idx_notes_body", Columns: []string{"body"}}},
+	}
+	new := Table{
+		Name:    "notes",
+		Columns: []Column{{Name: "id", Type: "INTEGER", PK: true}, {Name: "content", Type: "TEXT", NotNull: true, RenamedFrom: "body"}},
+		Indexes: []Index{{Name: "idx_notes_body", Columns: []string{"content"}}},
+	}
+
+	up, down, err := diffTable(old, new, "sqlite")
+	require.NoError(t, err)
+	upSQL, downSQL := strings.Join(up, "\n"), strings.Join(down, "\n")
+
+	// UP: the rebuild target is the new shape, so the index names the new column.
+	assert.Contains(t, upSQL, `CREATE INDEX "idx_notes_body" ON "notes" ("content");`)
+
+	// DOWN: DiffSchemas reverses the down statements, so the rebuild runs BEFORE
+	// the rename back. Its target is therefore the old shape under the NEW column
+	// names, and its index must name the new column too. An index left on "body"
+	// fails with "no such column".
+	downRebuild := downSQL[strings.Index(downSQL, "PRAGMA defer_foreign_keys"):]
+	assert.Contains(t, downRebuild, "\"content\" TEXT\n", "the old shape: TEXT, no NOT NULL")
+	assert.NotContains(t, downRebuild, `"content" TEXT NOT NULL`)
+	assert.Contains(t, downRebuild, `CREATE INDEX "idx_notes_body" ON "notes" ("content");`)
+	assertNoUnknownColumnRefs(t, downRebuild, "body")
+	// The rename back runs last, after the rebuild.
+	assert.Contains(t, downSQL, `RENAME COLUMN "content" TO "body"`)
+}
+
+func TestDiffTable_RenameAndRebuildRelabelsTheCompositePrimaryKey(t *testing.T) {
+	old := Table{
+		Name: "note_tags",
+		Columns: []Column{
+			{Name: "note_id", Type: "INTEGER"},
+			{Name: "tag", Type: "TEXT"},
+		},
+		PrimaryKey: []string{"note_id", "tag"},
+	}
+	new := Table{
+		Name: "note_tags",
+		Columns: []Column{
+			{Name: "note_id", Type: "INTEGER"},
+			{Name: "label", Type: "TEXT", NotNull: true, RenamedFrom: "tag"},
+		},
+		PrimaryKey: []string{"note_id", "label"},
+	}
+
+	up, down, err := diffTable(old, new, "sqlite")
+	require.NoError(t, err)
+	upSQL, downSQL := strings.Join(up, "\n"), strings.Join(down, "\n")
+
+	assert.Contains(t, upSQL, `PRIMARY KEY ("note_id", "label")`)
+	// The down rebuild runs before the rename back, so its primary key names the
+	// new column. A key left on "tag" fails with "no such column".
+	downRebuild := downSQL[strings.Index(downSQL, "PRAGMA defer_foreign_keys"):]
+	assert.Contains(t, downRebuild, `PRIMARY KEY ("note_id", "label")`)
+	assert.Contains(t, downRebuild, `"label" TEXT,`, "the old shape: TEXT, no NOT NULL")
+	assertNoUnknownColumnRefs(t, downRebuild, "tag")
+	assert.Contains(t, downSQL, `RENAME COLUMN "label" TO "tag"`)
+}
+
+func TestDiffTable_RenameOfAColumnWithACheckIsRejected(t *testing.T) {
+	old := Table{Name: "notes", Columns: []Column{
+		{Name: "state", Type: "TEXT", Check: `"state" IN ('draft', 'live')`},
+	}}
+	new := Table{Name: "notes", Columns: []Column{
+		{Name: "status", Type: "TEXT", NotNull: true, Check: `"status" IN ('draft', 'live')`, RenamedFrom: "state"},
+	}}
+
+	up, down, err := diffTable(old, new, "sqlite")
+	require.Error(t, err, "a renamed column carrying a CHECK cannot be rebuilt safely")
+	assert.Nil(t, up)
+	assert.Nil(t, down)
+	msg := err.Error()
+	assert.Contains(t, msg, `"notes"`)
+	assert.Contains(t, msg, `"state"`)
+	assert.Contains(t, msg, `"status"`)
+	assert.Contains(t, msg, "two migrations")
+}
+
+func TestDiffSchemas_TableRenamePlusColumnRenamePlusRebuildOnSQLite(t *testing.T) {
+	old := Schema{Tables: []Table{{
+		Name:    "notes",
+		Columns: []Column{{Name: "id", Type: "INTEGER", PK: true}, {Name: "body", Type: "TEXT"}},
+		Indexes: []Index{{Name: "idx_notes_body", Columns: []string{"body"}}},
+	}}}
+	newSchema := Schema{Tables: []Table{{
+		Name:        "memos",
+		RenamedFrom: "notes",
+		Columns: []Column{
+			{Name: "id", Type: "INTEGER", PK: true},
+			{Name: "content", Type: "TEXT", NotNull: true, RenamedFrom: "body"},
+		},
+		Indexes: []Index{{Name: "idx_notes_body", Columns: []string{"content"}}},
+	}}}
+
+	upSQL, downSQL, err := DiffSchemas(old, newSchema, "sqlite")
+	require.NoError(t, err)
+
+	// UP: rename the table, rename the column, then rebuild under the new names.
+	assert.Contains(t, upSQL, `ALTER TABLE "notes" RENAME TO "memos";`)
+	assert.Contains(t, upSQL, `ALTER TABLE "memos" RENAME COLUMN "body" TO "content";`)
+	assert.Contains(t, upSQL, `INSERT INTO "memos__drel_new" ("id", "content") SELECT "id", "content" FROM "memos";`)
+	assert.Contains(t, upSQL, `CREATE INDEX "idx_notes_body" ON "memos" ("content");`)
+	assert.Less(t, strings.Index(upSQL, `RENAME COLUMN "body"`), strings.Index(upSQL, "PRAGMA defer_foreign_keys"))
+
+	// DOWN: rebuild back to the old shape first, then rename the column back,
+	// then rename the table back. The down rebuild runs while the live table
+	// still carries the new names, so every column reference in it must be the
+	// NEW name, in the CREATE TABLE and in the CREATE INDEX alike.
+	rebuildStart := strings.Index(downSQL, "PRAGMA defer_foreign_keys")
+	rebuildEnd := strings.Index(downSQL, "PRAGMA foreign_key_check")
+	require.Greater(t, rebuildStart, -1)
+	require.Greater(t, rebuildEnd, rebuildStart)
+	rebuild := downSQL[rebuildStart:rebuildEnd]
+	assert.Contains(t, rebuild, `"content" TEXT`)
+	assert.NotContains(t, rebuild, `"content" TEXT NOT NULL`, "the down rebuild restores the old nullability")
+	assert.Contains(t, rebuild, `CREATE INDEX "idx_notes_body" ON "memos" ("content");`)
+	assertNoUnknownColumnRefs(t, rebuild, "body")
+
+	assert.Contains(t, downSQL, `ALTER TABLE "memos" RENAME COLUMN "content" TO "body";`)
+	assert.Contains(t, downSQL, `ALTER TABLE "memos" RENAME TO "notes";`)
+	assert.Less(t, rebuildEnd, strings.Index(downSQL, `RENAME COLUMN "content"`))
+	assert.Less(t, strings.Index(downSQL, `RENAME COLUMN "content"`), strings.Index(downSQL, `RENAME TO "notes"`))
+}
