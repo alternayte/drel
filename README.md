@@ -268,8 +268,12 @@ composite key (application-assigned, one column per exported field).
 - True JOIN-based eager loading is intentionally not offered; relationships
   load via batched split queries (correct for every shape, no cartesian
   products).
-- A composite-key model cannot be the target of a relationship. A foreign key to
-  a multi-column key is not yet emitted; codegen rejects it at generation time.
+- A composite-key model cannot be the target of a relationship, and cannot
+  declare `has_many`, `has_one`, or `many_to_many` itself. A foreign key to a
+  multi-column key is not yet emitted, the include loader matches a child
+  foreign key against one parent key value, and a many-to-many pivot needs one
+  column per key field. A composite-key model may declare `belongs_to` only.
+  Codegen rejects the other kinds at generation time.
 - A composite key must be application-assigned. Auto-increment applies only to a
   single integer key column.
 - Changing an existing table's primary key is not diffed. `Table.PrimaryKey` is

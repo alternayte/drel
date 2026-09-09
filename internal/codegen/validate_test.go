@@ -147,3 +147,57 @@ func TestValidateCompositeKeys_PassesForAPlainSingleKeyModel(t *testing.T) {
 		Key: []KeyColumn{{ColumnName: "id", GoType: "int"}}}
 	assert.NoError(t, validateCompositeKeys([]ModelInfo{m}))
 }
+
+// A composite-key model cannot be the source of has_many, has_one, or
+// many_to_many: the include loader binds one parent key value as the FK match
+// argument, and a pivot table gets one column per side.
+func TestValidateCompositeKeys_RejectsHasManyHasOneAndManyToManyOnACompositeKeyModel(t *testing.T) {
+	for _, kind := range []string{"has_many", "has_one", "many_to_many"} {
+		t.Run(kind, func(t *testing.T) {
+			line := compositeKeyModel()
+			line.Fields = []FieldInfo{{
+				Name:       "Notes",
+				IsExported: true,
+				Relation:   &RelationFieldInfo{Type: kind, TargetModel: "Note", FK: "order_line_id"},
+			}}
+			note := ModelInfo{Name: "Note", TableName: "notes", PKType: "int",
+				Key: []KeyColumn{{ColumnName: "id", GoType: "int"}}}
+
+			err := validateCompositeKeys([]ModelInfo{line, note})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "OrderLine.Notes")
+			assert.Contains(t, err.Error(), kind)
+			assert.Contains(t, err.Error(), "Only belongs_to is supported from a composite-key model")
+		})
+	}
+}
+
+// The rejection must be narrow: belongs_to from a composite-key model is the
+// one supported direction and must stay allowed.
+func TestValidateCompositeKeys_StillAllowsBelongsToOnACompositeKeyModel(t *testing.T) {
+	line := compositeKeyModel()
+	line.Fields = []FieldInfo{{
+		Name:       "Invoice",
+		IsExported: true,
+		Relation:   &RelationFieldInfo{Type: "belongs_to", TargetModel: "Invoice", FK: "invoice_id"},
+	}}
+	invoice := ModelInfo{Name: "Invoice", TableName: "invoices", PKType: "int",
+		Key: []KeyColumn{{ColumnName: "id", GoType: "int"}}}
+	assert.NoError(t, validateCompositeKeys([]ModelInfo{line, invoice}))
+}
+
+// A single-key model keeps every relationship kind.
+func TestValidateCompositeKeys_AllowsHasManyOnASingleKeyModel(t *testing.T) {
+	invoice := ModelInfo{
+		Name: "Invoice", TableName: "invoices", PKType: "int",
+		Key: []KeyColumn{{ColumnName: "id", GoType: "int"}},
+		Fields: []FieldInfo{{
+			Name:       "Notes",
+			IsExported: true,
+			Relation:   &RelationFieldInfo{Type: "has_many", TargetModel: "Note", FK: "invoice_id"},
+		}},
+	}
+	note := ModelInfo{Name: "Note", TableName: "notes", PKType: "int",
+		Key: []KeyColumn{{ColumnName: "id", GoType: "int"}}}
+	assert.NoError(t, validateCompositeKeys([]ModelInfo{invoice, note}))
+}

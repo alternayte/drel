@@ -218,6 +218,14 @@ func runMigrateNew(parsed parsedCmd) {
 		fmt.Fprintf(os.Stderr, "drel migrate new: no models found in module %q\n", target.Name)
 		os.Exit(1)
 	}
+	// The migration path must enforce the same limits as `drel generate`.
+	// Without this a rejected model still reaches BuildSchema and emits DDL
+	// that is silently wrong, such as a single-column REFERENCES to a
+	// composite-key table.
+	if err := codegen.ValidateModels(models); err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate new: %v\n", err)
+		os.Exit(1)
+	}
 
 	// A model may reference a table of another module. The merged apply order
 	// is by timestamp, so warn that the order matters.

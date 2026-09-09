@@ -19,12 +19,21 @@ minor versions may contain breaking changes.
   `drel.Model[K]`. Each exported field of the key struct becomes one key
   column, named by its own `db` tag, defaulting to snake-case; field order is
   the key order. A composite key is always application-assigned; auto-increment
-  applies only to a single integer key column. A composite-key model cannot be
-  the target of a relationship, because a multi-column foreign key is not
-  emitted; codegen rejects such a relationship at generation time.
+  applies only to a single integer key column. A composite-key model may declare
+  `belongs_to` only. It cannot be the target of a relationship, because a
+  multi-column foreign key is not emitted, and it cannot declare `has_many`,
+  `has_one`, or `many_to_many`, because the include loader matches a child
+  foreign key against one parent key value and a many-to-many pivot needs one
+  column per key field. Codegen rejects each of these at generation time.
 - A named primary key column, set by the first position of a `db` tag on the
   embedded `drel.Model` field, for example `drel.Model[string] \`db:"code"\``.
   A single `string` primary key is now documented; it has worked all along.
+  A named type over a scalar kind, such as `type AccountID int`, now gets a
+  column of its underlying kind instead of `text`. It is application-assigned,
+  so it never auto-increments. A `db` tag column name on the embedded
+  `drel.Model` field is rejected when the key is a struct; a composite key
+  takes its column names from the key struct's own field tags. The `table=`
+  option on that tag is unaffected.
 
 ### Fixed
 

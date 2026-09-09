@@ -59,7 +59,7 @@ func ValidateModels(models []ModelInfo) error {
 	return validateCompositeKeys(models)
 }
 
-// validateCompositeKeys enforces the two limits drel accepts for composite
+// validateCompositeKeys enforces the limits drel accepts for composite
 // primary keys. Both fail at generation time rather than emitting SQL that is
 // silently wrong.
 //
@@ -68,7 +68,12 @@ func ValidateModels(models []ModelInfo) error {
 //     emit; columnDefSQL always references the target's single key column.
 //     The runtime include path depends on the same guarantee: it loads a
 //     relationship target by RelatedMeta.PKColumns[0].
-//  2. A composite key's column names must be unique within the model, and must
+//  2. A composite-key model cannot declare has_many, has_one, or
+//     many_to_many. The include loader binds one parent key value as the FK
+//     match argument, and a pivot table gets one column per side, so both
+//     paths assume a single key column. belongs_to is unaffected: it reads the
+//     child's own FK column and is the only supported direction.
+//  3. A composite key's column names must be unique within the model, and must
 //     not collide with a non-key column.
 //
 // The second accepted limit, that a composite key cannot be auto-increment,
@@ -92,6 +97,18 @@ func validateCompositeKeys(models []ModelInfo) error {
 					"drel: %s.%s: model %s has a composite primary key and cannot be the target of a relationship; "+
 						"multi-column foreign keys are not yet supported. Give %s a single surrogate key, or drop the relationship",
 					m.Name, f.Name, f.Relation.TargetModel, f.Relation.TargetModel)
+			}
+			switch f.Relation.Type {
+			case "has_many", "has_one", "many_to_many":
+				if m.IsCompositeKey() {
+					return fmt.Errorf(
+						"drel: %s.%s: model %s has a composite primary key and cannot declare a %s relationship; "+
+							"the include loader matches a child foreign key against one parent key value, and a many-to-many pivot "+
+							"needs one column per key field, so drel would emit a wrong single-column foreign key. "+
+							"Only belongs_to is supported from a composite-key model. Declare the inverse belongs_to on %s and query it "+
+							"directly, or give %s a single surrogate key",
+						m.Name, f.Name, m.Name, f.Relation.Type, f.Relation.TargetModel, m.Name)
+				}
 			}
 		}
 
