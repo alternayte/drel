@@ -293,8 +293,9 @@ func GenerateDropSchema(models []ModelInfo) string {
 //   - per-table index add/drop
 //
 // SQLite cannot ALTER COLUMN TYPE or SET/DROP NOT NULL; those changes are emitted
-// as clearly-marked WARNING comments rather than silently skipped. Column renames
-// are not detected and surface as a drop + add.
+// as clearly-marked WARNING comments rather than silently skipped. A column
+// declared with a renamed_from marker emits RENAME COLUMN instead of a drop
+// and an add; an ambiguous marker is rejected with an error rather than guessed.
 func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string, err error) {
 	var up, down []string
 
