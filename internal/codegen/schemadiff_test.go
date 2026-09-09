@@ -134,7 +134,7 @@ func TestDiffSchemas_TypeChange_Postgres(t *testing.T) {
 	assert.Contains(t, down, `ALTER TABLE "users" ALTER COLUMN "age" TYPE integer;`)
 }
 
-func TestDiffSchemas_TypeChange_SQLiteWarning(t *testing.T) {
+func TestDiffSchemas_TypeChange_SQLiteRebuild(t *testing.T) {
 	old := Schema{Tables: []Table{
 		pgTable("users",
 			Column{Name: "id", Type: "INTEGER PRIMARY KEY AUTOINCREMENT", NotNull: true, PK: true},
@@ -149,7 +149,14 @@ func TestDiffSchemas_TypeChange_SQLiteWarning(t *testing.T) {
 	}}
 	up, _, err := DiffSchemas(old, newS, "sqlite")
 	require.NoError(t, err)
-	assert.Contains(t, up, `-- WARNING: SQLite cannot ALTER COLUMN TYPE for "users"."age" (INTEGER -> TEXT)`)
+	// SQLite cannot ALTER a column type in place, so the diff rebuilds the table.
+	assert.NotContains(t, up, "WARNING")
+	assert.Contains(t, up, "PRAGMA defer_foreign_keys = ON;")
+	assert.Contains(t, up, `CREATE TABLE "users__drel_new" (`)
+	assert.Contains(t, up, `"age" TEXT NOT NULL`)
+	assert.Contains(t, up, `INSERT INTO "users__drel_new" ("id", "age") SELECT "id", "age" FROM "users";`)
+	assert.Contains(t, up, `DROP TABLE "users";`)
+	assert.Contains(t, up, `ALTER TABLE "users__drel_new" RENAME TO "users";`)
 }
 
 func TestDiffSchemas_NotNullChange_Postgres(t *testing.T) {
@@ -171,7 +178,7 @@ func TestDiffSchemas_NotNullChange_Postgres(t *testing.T) {
 	assert.Contains(t, down, `ALTER TABLE "users" ALTER COLUMN "bio" DROP NOT NULL;`)
 }
 
-func TestDiffSchemas_NotNullChange_SQLiteWarning(t *testing.T) {
+func TestDiffSchemas_NotNullChange_SQLiteRebuild(t *testing.T) {
 	old := Schema{Tables: []Table{
 		pgTable("users",
 			Column{Name: "id", Type: "INTEGER PRIMARY KEY AUTOINCREMENT", NotNull: true, PK: true},
@@ -186,7 +193,13 @@ func TestDiffSchemas_NotNullChange_SQLiteWarning(t *testing.T) {
 	}}
 	up, _, err := DiffSchemas(old, newS, "sqlite")
 	require.NoError(t, err)
-	assert.Contains(t, up, `-- WARNING: SQLite cannot ALTER COLUMN NOT NULL for "users"."bio"`)
+	// SQLite cannot ALTER a column's nullability in place, so the diff rebuilds
+	// the table with the column declared NOT NULL.
+	assert.NotContains(t, up, "WARNING")
+	assert.Contains(t, up, `CREATE TABLE "users__drel_new" (`)
+	assert.Contains(t, up, `"bio" TEXT NOT NULL`)
+	assert.Contains(t, up, `INSERT INTO "users__drel_new" ("id", "bio") SELECT "id", "bio" FROM "users";`)
+	assert.Contains(t, up, `ALTER TABLE "users__drel_new" RENAME TO "users";`)
 }
 
 func TestDiffSchemas_AddIndex(t *testing.T) {
@@ -414,14 +427,17 @@ func TestDiffSchemas_DefaultAddDrop(t *testing.T) {
 	assert.Contains(t, up, `ALTER TABLE "users" ALTER COLUMN "role" SET DEFAULT 'user';`)
 	assert.Contains(t, down, `ALTER TABLE "users" ALTER COLUMN "role" DROP DEFAULT;`)
 
-	// SQLite cannot ALTER DEFAULT; it surfaces a WARNING rather than silently skipping.
+	// SQLite cannot ALTER DEFAULT; the diff rebuilds the table with the new default.
 	upLite, _, err := DiffSchemas(
 		BuildSchema([]ModelInfo{noDefault}, "sqlite"),
 		BuildSchema([]ModelInfo{withDefault}, "sqlite"),
 		"sqlite",
 	)
 	require.NoError(t, err)
-	assert.Contains(t, upLite, "WARNING: SQLite cannot ALTER COLUMN DEFAULT")
+	assert.NotContains(t, upLite, "WARNING")
+	assert.Contains(t, upLite, `CREATE TABLE "users__drel_new" (`)
+	assert.Contains(t, upLite, `DEFAULT 'user'`)
+	assert.Contains(t, upLite, `ALTER TABLE "users__drel_new" RENAME TO "users";`)
 }
 
 func TestDiffSchemas_GrowStringEnum_Postgres(t *testing.T) {
@@ -543,7 +559,7 @@ func TestDiffSchemas_AddCheckToExistingColumn_Postgres(t *testing.T) {
 	assert.Contains(t, down, `ALTER TABLE "products" DROP CONSTRAINT IF EXISTS "chk_products_price";`)
 }
 
-func TestDiffSchemas_CheckChange_SQLite_WarnsOnly(t *testing.T) {
+func TestDiffSchemas_CheckChange_SQLiteRebuild(t *testing.T) {
 	old := Schema{Tables: []Table{
 		{Name: "products", Columns: []Column{
 			{Name: "id", Type: "INTEGER PRIMARY KEY", NotNull: true, PK: true},
@@ -558,8 +574,13 @@ func TestDiffSchemas_CheckChange_SQLite_WarnsOnly(t *testing.T) {
 	}}
 	up, _, err := DiffSchemas(old, newS, "sqlite")
 	require.NoError(t, err)
-	assert.Contains(t, up, "WARNING: SQLite cannot ALTER CHECK")
+	// SQLite keeps CHECK inline, so changing one requires a table rebuild.
+	assert.NotContains(t, up, "WARNING")
 	assert.NotContains(t, up, "ADD CONSTRAINT")
+	assert.Contains(t, up, `CREATE TABLE "products__drel_new" (`)
+	assert.Contains(t, up, "CHECK(price >= 1)")
+	assert.Contains(t, up, `INSERT INTO "products__drel_new" ("id", "price") SELECT "id", "price" FROM "products";`)
+	assert.Contains(t, up, `ALTER TABLE "products__drel_new" RENAME TO "products";`)
 }
 
 func TestDiffSchemas_DropToEmpty_CoversPivotsAndEnums(t *testing.T) {

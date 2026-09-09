@@ -555,45 +555,68 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 	}
 
 	// Modified columns (present in both).
+	rebuild := false
 	for _, nc := range new.Columns {
 		oc, ok := oldCols[nc.Name]
 		if !ok {
 			continue
 		}
-		mu, md := diffColumn(new.Name, oc, nc, dialect)
+		mu, md, needsRebuild := diffColumn(new.Name, oc, nc, dialect)
 		up = append(up, mu...)
 		down = append(down, md...)
+		rebuild = rebuild || needsRebuild
 	}
 
-	// Index diffs.
-	oldIdx := indexIndexes(old.Indexes)
-	newIdx := indexIndexes(new.Indexes)
-	for _, idx := range new.Indexes {
-		if _, ok := oldIdx[idx.Name]; !ok {
-			up = append(up, strings.TrimRight(createIndexSQL(new.Name, idx), "\n"))
-			down = append(down, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
-		}
+	if rebuild {
+		// SQLite cannot ALTER these properties in place. One rebuild carries
+		// every such change on this table, so two changed columns produce one
+		// rebuild rather than two.
+		//
+		// The rebuild runs AFTER the rename statements emitted above, so by then
+		// the live table already carries the new column names. Its source shape
+		// must therefore be the old table relabelled, or sharedColumnNames finds
+		// no match for a renamed column and silently drops its data.
+		source := relabelColumns(old, renamedOld)
+
+		// Append each direction as ONE element. DiffSchemas reverses the down
+		// slice element-wise; a rebuild spread across elements would execute
+		// backwards (RENAME before DROP before INSERT before CREATE).
+		up = append(up, strings.Join(sqliteRebuild(new, source), "\n"))
+		down = append(down, strings.Join(sqliteRebuild(source, new), "\n"))
 	}
-	for _, idx := range old.Indexes {
-		if _, ok := newIdx[idx.Name]; !ok {
-			up = append(up, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
-			down = append(down, strings.TrimRight(createIndexSQL(old.Name, idx), "\n"))
+
+	// Index diffs. A rebuild already recreated every index the new table
+	// declares, so these passes are skipped to avoid a duplicate CREATE INDEX.
+	if !rebuild {
+		oldIdx := indexIndexes(old.Indexes)
+		newIdx := indexIndexes(new.Indexes)
+		for _, idx := range new.Indexes {
+			if _, ok := oldIdx[idx.Name]; !ok {
+				up = append(up, strings.TrimRight(createIndexSQL(new.Name, idx), "\n"))
+				down = append(down, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
+			}
+		}
+		for _, idx := range old.Indexes {
+			if _, ok := newIdx[idx.Name]; !ok {
+				up = append(up, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
+				down = append(down, strings.TrimRight(createIndexSQL(old.Name, idx), "\n"))
+			}
 		}
 	}
 
 	return up, down, nil
 }
 
-// diffColumn emits ALTER statements for a column whose definition changed between
-// the old and new schema (type and/or NOT NULL). SQLite cannot perform these
-// alterations, so a WARNING comment is emitted instead of a silent skip.
-func diffColumn(table string, old, new Column, dialect string) (up, down []string) {
+// diffColumn emits ALTER statements for a column whose definition changed
+// between the old and new schema (type, NOT NULL, DEFAULT, or CHECK).
+//
+// SQLite cannot ALTER any of these properties in place. For that dialect the
+// function emits no SQL and reports needsRebuild instead, so that diffTable can
+// emit one table rebuild covering every changed column on the table.
+func diffColumn(table string, old, new Column, dialect string) (up, down []string, needsRebuild bool) {
 	if old.Type != new.Type {
 		if dialect == "sqlite" {
-			up = append(up, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN TYPE for %s.%s (%s -> %s); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), old.Type, new.Type))
-			down = append(down, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN TYPE for %s.%s (%s -> %s); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), new.Type, old.Type))
+			needsRebuild = true
 		} else {
 			up = append(up, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s;",
 				quoteIdent(table), quoteIdent(new.Name), new.Type))
@@ -604,10 +627,7 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 
 	if old.NotNull != new.NotNull {
 		if dialect == "sqlite" {
-			up = append(up, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN NOT NULL for %s.%s; recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name)))
-			down = append(down, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN NOT NULL for %s.%s; recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name)))
+			needsRebuild = true
 		} else {
 			upClause, downClause := "SET NOT NULL", "DROP NOT NULL"
 			if !new.NotNull {
@@ -622,10 +642,7 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 
 	if old.Default != new.Default {
 		if dialect == "sqlite" {
-			up = append(up, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN DEFAULT for %s.%s (%q -> %q); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), old.Default, new.Default))
-			down = append(down, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER COLUMN DEFAULT for %s.%s (%q -> %q); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), new.Default, old.Default))
+			needsRebuild = true
 		} else {
 			up = append(up, alterDefaultSQL(table, new.Name, new.Default))
 			down = append(down, alterDefaultSQL(table, old.Name, old.Default))
@@ -634,10 +651,7 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 
 	if old.Check != new.Check {
 		if dialect == "sqlite" {
-			up = append(up, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER CHECK constraint on %s.%s (%q -> %q); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), old.Check, new.Check))
-			down = append(down, fmt.Sprintf(`-- WARNING: SQLite cannot ALTER CHECK constraint on %s.%s (%q -> %q); recreate the table manually`,
-				quoteIdent(table), quoteIdent(new.Name), new.Check, old.Check))
+			needsRebuild = true
 		} else {
 			name := checkConstraintName(table, new.Name)
 			// UP: drop the old constraint (if any), add the new one (if any).
@@ -661,7 +675,7 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 		}
 	}
 
-	return up, down
+	return up, down, needsRebuild
 }
 
 // diffEnumValues emits migration SQL for added/removed values of a Postgres
