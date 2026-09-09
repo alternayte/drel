@@ -375,12 +375,42 @@ func compositeKeyUUID(t *testing.T, engine *drel.Engine, dialect string) {
 	}
 }
 
+// compositeKeyBulkInsert proves the bulk insert path binds every key column.
+func compositeKeyBulkInsert(t *testing.T, engine *drel.Engine, dialect string) {
+	ctx := context.Background()
+	repo := drel.NewRepository(engine, testmodels.OrderLineMeta)
+
+	require.NoError(t, engine.WithTx(ctx, func(ctx context.Context) error {
+		tx := drel.MustFromContext(ctx)
+		r := drel.NewTxRepository(tx, testmodels.OrderLineMeta)
+		var lines []*testmodels.OrderLine
+		for i := 1; i <= 3; i++ {
+			l := &testmodels.OrderLine{Qty: i * 10}
+			l.SetID(testmodels.OrderLineKey{OrderID: 42, LineNo: testmodels.LineNo(i)})
+			lines = append(lines, l)
+		}
+		n, err := r.BulkInsert(ctx, lines)
+		if err != nil {
+			return err
+		}
+		assert.Equal(t, 3, n)
+		return nil
+	}))
+
+	for i := 1; i <= 3; i++ {
+		got, err := repo.Find(ctx, testmodels.OrderLineKey{OrderID: 42, LineNo: testmodels.LineNo(i)})
+		require.NoError(t, err, "bulk insert must write every key column")
+		assert.Equal(t, i*10, got.Qty)
+	}
+}
+
 func compositeKeyAllPaths(t *testing.T, engine *drel.Engine, dialect string) {
 	createCompositeTables(t, engine, dialect)
 	t.Run("plain", func(t *testing.T) { compositeKeyPlainPaths(t, engine, dialect) })
 	t.Run("soft_delete", func(t *testing.T) { compositeKeySoftDelete(t, engine, dialect) })
 	t.Run("versioned", func(t *testing.T) { compositeKeyVersioned(t, engine, dialect) })
 	t.Run("soft_delete_versioned", func(t *testing.T) { compositeKeySoftDeleteVersioned(t, engine, dialect) })
+	t.Run("bulk_insert", func(t *testing.T) { compositeKeyBulkInsert(t, engine, dialect) })
 	t.Run("uuid_key", func(t *testing.T) { compositeKeyUUID(t, engine, dialect) })
 }
 
