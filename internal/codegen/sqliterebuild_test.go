@@ -167,3 +167,75 @@ func TestDiffTable_PostgresIsUnaffected(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{`ALTER TABLE "notes" ALTER COLUMN "body" SET NOT NULL;`}, up)
 }
+
+func TestDiffTable_AddColumnPlusRebuildEmitsNoRedundantAlter(t *testing.T) {
+	old := Table{Name: "notes", Columns: []Column{
+		{Name: "body", Type: "TEXT"},
+	}}
+	new := Table{Name: "notes", Columns: []Column{
+		{Name: "body", Type: "INTEGER"}, // type change forces a rebuild
+		{Name: "pinned", Type: "INTEGER", Default: "0"},
+	}}
+
+	up, down, err := diffTable(old, new, "sqlite")
+	require.NoError(t, err)
+	upSQL, downSQL := strings.Join(up, "\n"), strings.Join(down, "\n")
+
+	// The rebuild's CREATE TABLE already carries the added column.
+	assert.Contains(t, upSQL, `"pinned" INTEGER DEFAULT 0`)
+	assert.NotContains(t, upSQL, "ADD COLUMN",
+		"the rebuild already adds the column, so a separate ALTER is redundant")
+	// The reversed rebuild already removes it, so a DROP COLUMN would fail with
+	// "no such column".
+	assert.NotContains(t, downSQL, "DROP COLUMN",
+		"the down rebuild already removes the added column")
+}
+
+func TestDiffTable_DropColumnPlusRebuildEmitsNoRedundantAlter(t *testing.T) {
+	old := Table{Name: "notes", Columns: []Column{
+		{Name: "body", Type: "TEXT"},
+		{Name: "legacy", Type: "TEXT"},
+	}}
+	new := Table{Name: "notes", Columns: []Column{
+		{Name: "body", Type: "INTEGER"}, // type change forces a rebuild
+	}}
+
+	up, down, err := diffTable(old, new, "sqlite")
+	require.NoError(t, err)
+	upSQL, downSQL := strings.Join(up, "\n"), strings.Join(down, "\n")
+
+	assert.NotContains(t, upSQL, "DROP COLUMN",
+		"the rebuild already drops the column, so a separate ALTER is redundant")
+	assert.NotContains(t, upSQL, `"legacy"`,
+		"the dropped column has no place in the new shape")
+	// The down rebuild recreates the old shape, which carries the column again.
+	assert.Contains(t, downSQL, `"legacy" TEXT`)
+	assert.NotContains(t, downSQL, "ADD COLUMN",
+		"the down rebuild already restores the dropped column")
+}
+
+func TestDiffTable_RebuildStillNotesAnAddedNotNullColumn(t *testing.T) {
+	old := Table{Name: "notes", Columns: []Column{
+		{Name: "body", Type: "TEXT"},
+	}}
+	new := Table{Name: "notes", Columns: []Column{
+		{Name: "body", Type: "INTEGER"}, // type change forces a rebuild
+		{Name: "owner", Type: "TEXT", NotNull: true},
+	}}
+
+	up, _, err := diffTable(old, new, "sqlite")
+	require.NoError(t, err)
+	upSQL := strings.Join(up, "\n")
+
+	// The rebuild's INSERT copies only the shared columns, so a new NOT NULL
+	// column with no default is never populated and the rebuild fails on a
+	// non-empty table. The note must survive the rebuild guard.
+	assert.Contains(t, upSQL, "NOTE: adding NOT NULL column")
+	assert.Contains(t, upSQL, `"owner"`)
+	assert.NotContains(t, upSQL, "ADD COLUMN")
+
+	noteAt := strings.Index(upSQL, "NOTE: adding NOT NULL column")
+	pragmaAt := strings.Index(upSQL, "PRAGMA defer_foreign_keys")
+	require.NotEqual(t, -1, pragmaAt)
+	assert.Less(t, noteAt, pragmaAt, "the note must precede the rebuild it warns about")
+}

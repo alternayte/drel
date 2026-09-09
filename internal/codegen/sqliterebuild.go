@@ -25,6 +25,11 @@ const rebuildSuffix = "__drel_new"
 // The INSERT names its columns explicitly and copies only the columns present
 // in both shapes. Reliance on column order would silently mis-map a column when
 // the new shape adds or drops one.
+//
+// The trailing PRAGMA foreign_key_check is advisory only. It reports violations
+// as a result set rather than as an error, so it cannot abort the transaction
+// and must never be relied on as enforcement. It is emitted so that an operator
+// who reads or runs the migration by hand can see the violations.
 func sqliteRebuild(target Table, source Table) []string {
 	scratch := target.Name + rebuildSuffix
 

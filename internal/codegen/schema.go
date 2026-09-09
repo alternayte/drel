@@ -526,14 +526,41 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 	}
 	newCols := indexColumns(new.Columns)
 
+	// Modified columns (present in both). This pass runs first, ahead of the
+	// add and drop passes, because it decides whether the table needs a
+	// rebuild. The add and drop passes must know that: on the rebuild path the
+	// rebuild's own CREATE TABLE already expresses the complete target shape,
+	// so a separate ALTER ... ADD/DROP COLUMN is redundant on the up path and
+	// breaks the down path, where the reversed rebuild has already applied it.
+	// Its statements are appended below, in their original position.
+	var modUp, modDown []string
+	rebuild := false
+	for _, nc := range new.Columns {
+		oc, ok := oldCols[nc.Name]
+		if !ok {
+			continue
+		}
+		mu, md, needsRebuild := diffColumn(new.Name, oc, nc, dialect)
+		modUp = append(modUp, mu...)
+		modDown = append(modDown, md...)
+		rebuild = rebuild || needsRebuild
+	}
+
 	// Added columns (preserve new-table order).
 	for _, c := range new.Columns {
 		if _, ok := oldCols[c.Name]; !ok {
 			// Adding a NOT NULL column without a default fails on a non-empty
 			// table; surface this for the reviewer rather than failing silently.
 			if c.NotNull && c.Default == "" {
+				// This note matters more on the rebuild path, not less: the
+				// rebuild's INSERT copies only the shared columns, so a new
+				// NOT NULL column with no default is never populated and the
+				// rebuild fails on a non-empty table.
 				up = append(up, fmt.Sprintf(`-- NOTE: adding NOT NULL column %s to existing table %s; ensure the table is empty or add a DEFAULT / backfill before applying`,
 					quoteIdent(c.Name), quoteIdent(new.Name)))
+			}
+			if rebuild {
+				continue // the rebuild's CREATE TABLE already declares this column
 			}
 			up = append(up, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;", quoteIdent(new.Name), columnDefSQL(c, dialect)))
 			down = append(down, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", quoteIdent(new.Name), quoteIdent(c.Name)))
@@ -543,29 +570,23 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 	// Dropped columns (preserve old-table order). A renamed column is looked
 	// up by its new name — it is present in newCols under that name, so it is
 	// not dropped here; the rename statement above already handled it.
-	for _, c := range old.Columns {
-		name := c.Name
-		if nn, renamed := renamedOld[name]; renamed {
-			name = nn
-		}
-		if _, ok := newCols[name]; !ok {
-			up = append(up, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", quoteIdent(old.Name), quoteIdent(c.Name)))
-			down = append(down, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;", quoteIdent(old.Name), columnDefSQL(c, dialect)))
+	// On the rebuild path this pass is skipped: the rebuild's CREATE TABLE omits
+	// the dropped column, and the reversed rebuild restores it.
+	if !rebuild {
+		for _, c := range old.Columns {
+			name := c.Name
+			if nn, renamed := renamedOld[name]; renamed {
+				name = nn
+			}
+			if _, ok := newCols[name]; !ok {
+				up = append(up, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", quoteIdent(old.Name), quoteIdent(c.Name)))
+				down = append(down, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s;", quoteIdent(old.Name), columnDefSQL(c, dialect)))
+			}
 		}
 	}
 
-	// Modified columns (present in both).
-	rebuild := false
-	for _, nc := range new.Columns {
-		oc, ok := oldCols[nc.Name]
-		if !ok {
-			continue
-		}
-		mu, md, needsRebuild := diffColumn(new.Name, oc, nc, dialect)
-		up = append(up, mu...)
-		down = append(down, md...)
-		rebuild = rebuild || needsRebuild
-	}
+	up = append(up, modUp...)
+	down = append(down, modDown...)
 
 	if rebuild {
 		// SQLite cannot ALTER these properties in place. One rebuild carries
