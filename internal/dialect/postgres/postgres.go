@@ -436,7 +436,24 @@ func (p *Postgres) BuildInsert(table string, columns []string, values []any, ret
 	return dialect.Result{SQL: b.String(), Args: values}
 }
 
-func (p *Postgres) BuildUpdate(table string, changes []dialect.ColumnValue, pkColumn string, pkValue any) dialect.Result {
+// pkWhere renders an AND-joined equality clause over the primary key columns,
+// numbering placeholders from startIdx. It returns the clause text (without a
+// leading "WHERE") and the next free placeholder index. A one-column key
+// renders exactly as the old single-column code rendered it.
+func pkWhere(pkColumns []string, startIdx int) (string, int) {
+	var b strings.Builder
+	idx := startIdx
+	for i, c := range pkColumns {
+		if i > 0 {
+			b.WriteString(" AND ")
+		}
+		b.WriteString(fmt.Sprintf("%s = $%d", quoteIdent(c), idx))
+		idx++
+	}
+	return b.String(), idx
+}
+
+func (p *Postgres) BuildUpdate(table string, changes []dialect.ColumnValue, pkColumns []string, pkValues []any) dialect.Result {
 	changes = dedupLastWins(changes)
 	var b strings.Builder
 	var args []any
@@ -456,43 +473,45 @@ func (p *Postgres) BuildUpdate(table string, changes []dialect.ColumnValue, pkCo
 			paramIdx++
 		}
 	}
-	b.WriteString(fmt.Sprintf(" WHERE %s = $%d", quoteIdent(pkColumn), paramIdx))
-	args = append(args, pkValue)
+	where, _ := pkWhere(pkColumns, paramIdx)
+	b.WriteString(" WHERE ")
+	b.WriteString(where)
+	args = append(args, pkValues...)
 	return dialect.Result{SQL: b.String(), Args: args}
 }
 
-func (p *Postgres) BuildDelete(table string, pkColumn string, pkValue any) dialect.Result {
-	sql := fmt.Sprintf("DELETE FROM %s WHERE %s = $1", quoteIdent(table), quoteIdent(pkColumn))
-	return dialect.Result{SQL: sql, Args: []any{pkValue}}
+func (p *Postgres) BuildDelete(table string, pkColumns []string, pkValues []any) dialect.Result {
+	where, _ := pkWhere(pkColumns, 1)
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s", quoteIdent(table), where)
+	return dialect.Result{SQL: sql, Args: append([]any(nil), pkValues...)}
 }
 
-func (p *Postgres) BuildSoftDelete(table string, pkColumn string, pkValue any) dialect.Result {
-	sql := fmt.Sprintf(
-		"UPDATE %s SET %s = NOW() WHERE %s = $1",
-		quoteIdent(table), quoteIdent("deleted_at"), quoteIdent(pkColumn),
-	)
-	return dialect.Result{SQL: sql, Args: []any{pkValue}}
+func (p *Postgres) BuildSoftDelete(table string, pkColumns []string, pkValues []any) dialect.Result {
+	where, _ := pkWhere(pkColumns, 1)
+	sql := fmt.Sprintf("UPDATE %s SET %s = NOW() WHERE %s",
+		quoteIdent(table), quoteIdent("deleted_at"), where)
+	return dialect.Result{SQL: sql, Args: append([]any(nil), pkValues...)}
 }
 
-func (p *Postgres) BuildDeleteVersioned(table string, pkColumn string, pkValue any, versionCol string, currentVersion int) dialect.Result {
-	sql := fmt.Sprintf(
-		"DELETE FROM %s WHERE %s = $1 AND %s = $2 RETURNING %s",
-		quoteIdent(table), quoteIdent(pkColumn), quoteIdent(versionCol), quoteIdent(pkColumn),
-	)
-	return dialect.Result{SQL: sql, Args: []any{pkValue, currentVersion}}
+func (p *Postgres) BuildDeleteVersioned(table string, pkColumns []string, pkValues []any, versionCol string, currentVersion int) dialect.Result {
+	where, idx := pkWhere(pkColumns, 1)
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s AND %s = $%d RETURNING %s",
+		quoteIdent(table), where, quoteIdent(versionCol), idx, quoteIdent(pkColumns[0]))
+	args := append(append([]any(nil), pkValues...), currentVersion)
+	return dialect.Result{SQL: sql, Args: args}
 }
 
-func (p *Postgres) BuildSoftDeleteVersioned(table string, pkColumn string, pkValue any, versionCol string, currentVersion int) dialect.Result {
-	sql := fmt.Sprintf(
-		"UPDATE %s SET %s = NOW(), %s = %s + 1 WHERE %s = $1 AND %s = $2 RETURNING %s",
+func (p *Postgres) BuildSoftDeleteVersioned(table string, pkColumns []string, pkValues []any, versionCol string, currentVersion int) dialect.Result {
+	where, idx := pkWhere(pkColumns, 1)
+	sql := fmt.Sprintf("UPDATE %s SET %s = NOW(), %s = %s + 1 WHERE %s AND %s = $%d RETURNING %s",
 		quoteIdent(table), quoteIdent("deleted_at"),
 		quoteIdent(versionCol), quoteIdent(versionCol),
-		quoteIdent(pkColumn), quoteIdent(versionCol), quoteIdent(pkColumn),
-	)
-	return dialect.Result{SQL: sql, Args: []any{pkValue, currentVersion}}
+		where, quoteIdent(versionCol), idx, quoteIdent(pkColumns[0]))
+	args := append(append([]any(nil), pkValues...), currentVersion)
+	return dialect.Result{SQL: sql, Args: args}
 }
 
-func (p *Postgres) BuildUpdateVersioned(table string, changes []dialect.ColumnValue, pkColumn string, pkValue any, versionCol string, currentVersion int) dialect.Result {
+func (p *Postgres) BuildUpdateVersioned(table string, changes []dialect.ColumnValue, pkColumns []string, pkValues []any, versionCol string, currentVersion int) dialect.Result {
 	changes = dedupLastWins(changes)
 	var b strings.Builder
 	var args []any
@@ -517,11 +536,12 @@ func (p *Postgres) BuildUpdateVersioned(table string, changes []dialect.ColumnVa
 
 	b.WriteString(fmt.Sprintf(", %s = %s + 1", quoteIdent(versionCol), quoteIdent(versionCol)))
 
-	b.WriteString(fmt.Sprintf(" WHERE %s = $%d", quoteIdent(pkColumn), paramIdx))
-	args = append(args, pkValue)
-	paramIdx++
+	where, nextIdx := pkWhere(pkColumns, paramIdx)
+	b.WriteString(" WHERE ")
+	b.WriteString(where)
+	args = append(args, pkValues...)
 
-	b.WriteString(fmt.Sprintf(" AND %s = $%d", quoteIdent(versionCol), paramIdx))
+	b.WriteString(fmt.Sprintf(" AND %s = $%d", quoteIdent(versionCol), nextIdx))
 	args = append(args, currentVersion)
 
 	b.WriteString(fmt.Sprintf(" RETURNING %s", quoteIdent(versionCol)))

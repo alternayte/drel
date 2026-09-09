@@ -810,7 +810,7 @@ func TestPostgres_BuildUpdate_DeduplicatesColumns(t *testing.T) {
 			{Column: "updated_by", Value: "alice"},
 			{Column: "updated_by", Value: "bob"}, // duplicate: last wins
 		},
-		"id", 5)
+		[]string{"id"}, []any{5})
 	// Single updated_by assignment, keeping the last value (bob -> $3 ... pkVal -> $4).
 	assert.Equal(t,
 		`UPDATE "a_products" SET "name" = $1, "updated_by" = $2 WHERE "id" = $3`,
@@ -826,7 +826,7 @@ func TestPostgres_BuildUpdateVersioned_DeduplicatesColumns(t *testing.T) {
 			{Column: "updated_by", Value: "alice"},
 			{Column: "updated_by", Value: "bob"},
 		},
-		"id", 5, "version", 2)
+		[]string{"id"}, []any{5}, "version", 2)
 	assert.Equal(t,
 		`UPDATE "a_products" SET "name" = $1, "updated_by" = $2, "version" = "version" + 1 WHERE "id" = $3 AND "version" = $4 RETURNING "version"`,
 		res.SQL)
@@ -835,7 +835,7 @@ func TestPostgres_BuildUpdateVersioned_DeduplicatesColumns(t *testing.T) {
 
 func TestPostgres_BuildDeleteVersioned(t *testing.T) {
 	pg := New()
-	res := pg.BuildDeleteVersioned("v_products", "id", 7, "version", 3)
+	res := pg.BuildDeleteVersioned("v_products", []string{"id"}, []any{7}, "version", 3)
 	assert.Equal(t,
 		`DELETE FROM "v_products" WHERE "id" = $1 AND "version" = $2 RETURNING "id"`,
 		res.SQL)
@@ -844,7 +844,7 @@ func TestPostgres_BuildDeleteVersioned(t *testing.T) {
 
 func TestPostgres_BuildSoftDeleteVersioned(t *testing.T) {
 	pg := New()
-	res := pg.BuildSoftDeleteVersioned("v_products", "id", 7, "version", 3)
+	res := pg.BuildSoftDeleteVersioned("v_products", []string{"id"}, []any{7}, "version", 3)
 	assert.Equal(t,
 		`UPDATE "v_products" SET "deleted_at" = NOW(), "version" = "version" + 1 WHERE "id" = $1 AND "version" = $2 RETURNING "id"`,
 		res.SQL)
@@ -1185,4 +1185,56 @@ func TestBuildSelectCountStarInGroupBy(t *testing.T) {
 	}
 	result := d.BuildSelect(node)
 	assert.Equal(t, `SELECT "status", COUNT(*) AS "cnt" FROM "orders" GROUP BY "status"`, result.SQL)
+}
+
+func TestPostgres_BuildDelete_CompositeKey(t *testing.T) {
+	p := New()
+	got := p.BuildDelete("order_lines", []string{"order_id", "line_no"}, []any{3, 1})
+	assert.Equal(t, `DELETE FROM "order_lines" WHERE "order_id" = $1 AND "line_no" = $2`, got.SQL)
+	assert.Equal(t, []any{3, 1}, got.Args)
+}
+
+func TestPostgres_BuildUpdate_CompositeKeyNumbersParamsAfterTheSets(t *testing.T) {
+	p := New()
+	got := p.BuildUpdate("order_lines",
+		[]dialect.ColumnValue{{Column: "qty", Value: 5}},
+		[]string{"order_id", "line_no"}, []any{3, 1})
+	assert.Equal(t, `UPDATE "order_lines" SET "qty" = $1 WHERE "order_id" = $2 AND "line_no" = $3`, got.SQL)
+	assert.Equal(t, []any{5, 3, 1}, got.Args)
+}
+
+func TestPostgres_BuildSoftDelete_CompositeKey(t *testing.T) {
+	p := New()
+	got := p.BuildSoftDelete("order_lines", []string{"order_id", "line_no"}, []any{3, 1})
+	assert.Equal(t, `UPDATE "order_lines" SET "deleted_at" = NOW() WHERE "order_id" = $1 AND "line_no" = $2`, got.SQL)
+	assert.Equal(t, []any{3, 1}, got.Args)
+}
+
+func TestPostgres_BuildDeleteVersioned_CompositeKeyReturnsTheFirstKeyColumn(t *testing.T) {
+	p := New()
+	got := p.BuildDeleteVersioned("order_lines", []string{"order_id", "line_no"}, []any{3, 1}, "version", 4)
+	assert.Equal(t,
+		`DELETE FROM "order_lines" WHERE "order_id" = $1 AND "line_no" = $2 AND "version" = $3 RETURNING "order_id"`,
+		got.SQL)
+	assert.Equal(t, []any{3, 1, 4}, got.Args)
+}
+
+func TestPostgres_BuildSoftDeleteVersioned_CompositeKey(t *testing.T) {
+	p := New()
+	got := p.BuildSoftDeleteVersioned("order_lines", []string{"order_id", "line_no"}, []any{3, 1}, "version", 4)
+	assert.Equal(t,
+		`UPDATE "order_lines" SET "deleted_at" = NOW(), "version" = "version" + 1 WHERE "order_id" = $1 AND "line_no" = $2 AND "version" = $3 RETURNING "order_id"`,
+		got.SQL)
+	assert.Equal(t, []any{3, 1, 4}, got.Args)
+}
+
+func TestPostgres_BuildUpdateVersioned_CompositeKey(t *testing.T) {
+	p := New()
+	got := p.BuildUpdateVersioned("order_lines",
+		[]dialect.ColumnValue{{Column: "qty", Value: 5}},
+		[]string{"order_id", "line_no"}, []any{3, 1}, "version", 4)
+	assert.Equal(t,
+		`UPDATE "order_lines" SET "qty" = $1, "version" = "version" + 1 WHERE "order_id" = $2 AND "line_no" = $3 AND "version" = $4 RETURNING "version"`,
+		got.SQL)
+	assert.Equal(t, []any{5, 3, 1, 4}, got.Args)
 }

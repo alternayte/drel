@@ -25,21 +25,21 @@ func TestPostgres_BuildInsert_NoReturning(t *testing.T) {
 
 func TestPostgres_BuildUpdate_SingleField(t *testing.T) {
 	pg := postgres.New()
-	result := pg.BuildUpdate("users", []dialect.ColumnValue{{Column: "name", Value: "Bob"}}, "id", 1)
+	result := pg.BuildUpdate("users", []dialect.ColumnValue{{Column: "name", Value: "Bob"}}, []string{"id"}, []any{1})
 	assert.Equal(t, `UPDATE "users" SET "name" = $1 WHERE "id" = $2`, result.SQL)
 	assert.Equal(t, []any{"Bob", 1}, result.Args)
 }
 
 func TestPostgres_BuildUpdate_MultipleFields(t *testing.T) {
 	pg := postgres.New()
-	result := pg.BuildUpdate("users", []dialect.ColumnValue{{Column: "name", Value: "Bob"}, {Column: "age", Value: 31}}, "id", 42)
+	result := pg.BuildUpdate("users", []dialect.ColumnValue{{Column: "name", Value: "Bob"}, {Column: "age", Value: 31}}, []string{"id"}, []any{42})
 	assert.Equal(t, `UPDATE "users" SET "name" = $1, "age" = $2 WHERE "id" = $3`, result.SQL)
 	assert.Equal(t, []any{"Bob", 31, 42}, result.Args)
 }
 
 func TestPostgres_BuildDelete(t *testing.T) {
 	pg := postgres.New()
-	result := pg.BuildDelete("users", "id", 99)
+	result := pg.BuildDelete("users", []string{"id"}, []any{99})
 	assert.Equal(t, `DELETE FROM "users" WHERE "id" = $1`, result.SQL)
 	assert.Equal(t, []any{99}, result.Args)
 }
@@ -69,7 +69,7 @@ func TestSQLite_BuildUpdateVersioned_EmitsReturning(t *testing.T) {
 	sq := dialectsqlite.New()
 	result := sq.BuildUpdateVersioned("items",
 		[]dialect.ColumnValue{{Column: "name", Value: "Widget"}},
-		"id", 3, "version", 2,
+		[]string{"id"}, []any{3}, "version", 2,
 	)
 	assert.Contains(t, result.SQL, "RETURNING")
 	assert.Equal(t,
@@ -86,7 +86,7 @@ func TestSQLite_BuildUpdate_WithRawExpr_UsesCurrentTimestamp(t *testing.T) {
 			{Column: "name", Value: "Bob"},
 			{Column: "updated_at", Value: dialect.RawExpr{SQL: sq.Now()}},
 		},
-		"id", 1,
+		[]string{"id"}, []any{1},
 	)
 	assert.Contains(t, result.SQL, "CURRENT_TIMESTAMP")
 	assert.NotContains(t, result.SQL, "NOW()")
@@ -99,7 +99,7 @@ func TestPostgres_BuildUpdate_WithRawExpr_UsesNow(t *testing.T) {
 			{Column: "name", Value: "Bob"},
 			{Column: "updated_at", Value: dialect.RawExpr{SQL: pg.Now()}},
 		},
-		"id", 1,
+		[]string{"id"}, []any{1},
 	)
 	assert.Contains(t, result.SQL, "NOW()")
 	assert.NotContains(t, result.SQL, "CURRENT_TIMESTAMP")

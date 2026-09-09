@@ -21,18 +21,18 @@ func (fakeDialect) BuildSelect(ast.SelectNode) dialect.Result { return dialect.R
 func (fakeDialect) BuildInsert(string, []string, []any, []string) dialect.Result {
 	return dialect.Result{}
 }
-func (fakeDialect) BuildUpdate(string, []dialect.ColumnValue, string, any) dialect.Result {
+func (fakeDialect) BuildUpdate(string, []dialect.ColumnValue, []string, []any) dialect.Result {
 	return dialect.Result{}
 }
-func (fakeDialect) BuildDelete(string, string, any) dialect.Result     { return dialect.Result{} }
-func (fakeDialect) BuildSoftDelete(string, string, any) dialect.Result { return dialect.Result{} }
-func (fakeDialect) BuildUpdateVersioned(string, []dialect.ColumnValue, string, any, string, int) dialect.Result {
+func (fakeDialect) BuildDelete(string, []string, []any) dialect.Result     { return dialect.Result{} }
+func (fakeDialect) BuildSoftDelete(string, []string, []any) dialect.Result { return dialect.Result{} }
+func (fakeDialect) BuildUpdateVersioned(string, []dialect.ColumnValue, []string, []any, string, int) dialect.Result {
 	return dialect.Result{}
 }
-func (fakeDialect) BuildDeleteVersioned(string, string, any, string, int) dialect.Result {
+func (fakeDialect) BuildDeleteVersioned(string, []string, []any, string, int) dialect.Result {
 	return dialect.Result{}
 }
-func (fakeDialect) BuildSoftDeleteVersioned(string, string, any, string, int) dialect.Result {
+func (fakeDialect) BuildSoftDeleteVersioned(string, []string, []any, string, int) dialect.Result {
 	return dialect.Result{}
 }
 func (fakeDialect) BuildBulkInsert(string, []string, [][]any) dialect.Result { return dialect.Result{} }
