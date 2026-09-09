@@ -91,8 +91,13 @@ func softversionedorderlineInsertColumns(p *SoftVersionedOrderLine) ([]string, [
 }
 
 func softversionedorderlineScanReturning(p *SoftVersionedOrderLine, row drel.Row) error {
-	idPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()
-	return row.Scan(idPtr, createdAtPtr, updatedAtPtr)
+	_, createdAtPtr, updatedAtPtr := p.ScanPtrs()
+	var k OrderLineKey
+	if err := row.Scan(&k.OrderID, &k.LineNo, createdAtPtr, updatedAtPtr); err != nil {
+		return err
+	}
+	p.SetID(k)
+	return nil
 }
 
 // softversionedorderlineNormalizeKey converts per-column driver values into a canonical OrderLineKey,

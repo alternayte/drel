@@ -366,7 +366,7 @@ func EmitModelFile(m ModelInfo) string {
 	emitInsertColumns(&b, m, lower, aliases)
 
 	// --- Scan returning ---
-	emitScanReturning(&b, m, lower)
+	emitScanReturning(&b, m, lower, aliases)
 
 	// --- Key normalizer (matches pivot keys to the canonical PK type) ---
 	emitNormalizeKey(&b, m, lower, aliases)
@@ -762,10 +762,26 @@ func emitInsertColumns(b *strings.Builder, m ModelInfo, lower string, aliases ma
 	b.WriteString("}\n\n")
 }
 
-func emitScanReturning(b *strings.Builder, m ModelInfo, lower string) {
+func emitScanReturning(b *strings.Builder, m ModelInfo, lower string, aliases map[string]string) {
 	b.WriteString(fmt.Sprintf("func %sScanReturning(p *%s, row drel.Row) error {\n", lower, m.Name))
-	b.WriteString("\tidPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
-	b.WriteString("\treturn row.Scan(idPtr, createdAtPtr, updatedAtPtr)\n")
+	if !m.IsCompositeKey() {
+		b.WriteString("\tidPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
+		b.WriteString("\treturn row.Scan(idPtr, createdAtPtr, updatedAtPtr)\n")
+		b.WriteString("}\n\n")
+		return
+	}
+	// The RETURNING list of a composite key is one item for each key column, so
+	// the key cannot be scanned as a single destination.
+	b.WriteString("\t_, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
+	b.WriteString(fmt.Sprintf("\tvar k %s\n", resolvePKDisplay(m, aliases)))
+	dests := make([]string, 0, len(m.Key)+2)
+	for _, kc := range m.Key {
+		dests = append(dests, "&k."+kc.FieldName)
+	}
+	dests = append(dests, "createdAtPtr", "updatedAtPtr")
+	b.WriteString(fmt.Sprintf("\tif err := row.Scan(%s); err != nil {\n\t\treturn err\n\t}\n", strings.Join(dests, ", ")))
+	b.WriteString("\tp.SetID(k)\n")
+	b.WriteString("\treturn nil\n")
 	b.WriteString("}\n\n")
 }
 

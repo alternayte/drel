@@ -1,7 +1,9 @@
 package testmodels_test
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/alternayte/drel/internal/testmodels"
 	"github.com/google/uuid"
@@ -49,4 +51,58 @@ func TestCompositeKeyValues(t *testing.T) {
 	vals := testmodels.OrderLineMeta.KeyValues(testmodels.OrderLineKey{OrderID: 3, LineNo: 7})
 	assert.Equal(t, []any{3, testmodels.LineNo(7)}, vals)
 	assert.Equal(t, []string{"order_id", "line_no"}, testmodels.OrderLineMeta.PKColumns)
+}
+
+// fakeRow assigns one prepared value to each scan destination. It accepts only
+// the destination types a composite key column can have, so a struct pointer —
+// the shape the emitter produced before Task 9 — is reported as an error.
+type fakeRow struct{ vals []any }
+
+func (r *fakeRow) Scan(dest ...any) error {
+	if len(dest) != len(r.vals) {
+		return fmt.Errorf("scan: got %d destinations, want %d", len(dest), len(r.vals))
+	}
+	for i, d := range dest {
+		switch p := d.(type) {
+		case *int:
+			*p = r.vals[i].(int)
+		case *testmodels.LineNo:
+			*p = testmodels.LineNo(r.vals[i].(int))
+		case *uuid.UUID:
+			*p = r.vals[i].(uuid.UUID)
+		case *time.Time:
+			*p = r.vals[i].(time.Time)
+		default:
+			return fmt.Errorf("scan: destination %d has unsupported type %T", i, d)
+		}
+	}
+	return nil
+}
+
+// TestCompositeScanReturning pins the generated ScanReturning of a composite
+// key. Nothing calls it today, because a struct key is always app-assigned and
+// the insert path then uses ScanGenerated. It must still scan one destination
+// for each key column, so a later change to the strategy selection cannot
+// resurrect a single struct destination handed to the driver.
+func TestCompositeScanReturning(t *testing.T) {
+	require.NotNil(t, testmodels.OrderLineMeta.ScanReturning)
+
+	now := time.Now()
+	row := &fakeRow{vals: []any{3, 7, now, now}}
+	var line testmodels.OrderLine
+	require.NoError(t, testmodels.OrderLineMeta.ScanReturning(&line, row))
+
+	assert.Equal(t, testmodels.OrderLineKey{OrderID: 3, LineNo: 7}, line.ID(),
+		"ScanReturning must read one destination per key column and set the key")
+	assert.Equal(t, now, line.CreatedAt())
+	assert.Equal(t, now, line.UpdatedAt())
+}
+
+func TestCompositeScanReturning_UUIDKey(t *testing.T) {
+	id := uuid.MustParse("018f3f1a-0000-7000-8000-0000000000bb")
+	now := time.Now()
+	row := &fakeRow{vals: []any{id, 4, now, now}}
+	var doc testmodels.TenantDoc
+	require.NoError(t, testmodels.TenantDocMeta.ScanReturning(&doc, row))
+	assert.Equal(t, testmodels.TenantDocKey{TenantID: id, DocNo: 4}, doc.ID())
 }

@@ -83,8 +83,13 @@ func tenantdocInsertColumns(p *TenantDoc) ([]string, []any) {
 }
 
 func tenantdocScanReturning(p *TenantDoc, row drel.Row) error {
-	idPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()
-	return row.Scan(idPtr, createdAtPtr, updatedAtPtr)
+	_, createdAtPtr, updatedAtPtr := p.ScanPtrs()
+	var k TenantDocKey
+	if err := row.Scan(&k.TenantID, &k.DocNo, createdAtPtr, updatedAtPtr); err != nil {
+		return err
+	}
+	p.SetID(k)
+	return nil
 }
 
 // tenantdocNormalizeKey converts per-column driver values into a canonical TenantDocKey,
