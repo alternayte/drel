@@ -32,11 +32,6 @@ func TestPKPredicate_PanicsOnLengthMismatch(t *testing.T) {
 	assert.Panics(t, func() { pkPredicate([]string{"a", "b"}, []any{1}) })
 }
 
-func TestPKColumnsOf_FallsBackToTheLegacySingleColumn(t *testing.T) {
-	assert.Equal(t, []string{"id"}, pkColumnsOf("id", nil))
-	assert.Equal(t, []string{"a", "b"}, pkColumnsOf("id", []string{"a", "b"}))
-}
-
 func TestKeyValuesOf_FallsBackToTheWholeKey(t *testing.T) {
 	assert.Equal(t, []any{7}, keyValuesOf(nil, 7))
 	split := func(k any) []any { return []any{k, 2} }
@@ -44,7 +39,7 @@ func TestKeyValuesOf_FallsBackToTheWholeKey(t *testing.T) {
 }
 
 func TestFind_CompositeKeyBuildsAnAndedPredicate(t *testing.T) {
-	cols := pkColumnsOf("", []string{"order_id", "line_no"})
+	cols := []string{"order_id", "line_no"}
 	split := func(k any) []any {
 		key := k.(struct {
 			OrderID int

@@ -6,16 +6,6 @@ import (
 	"github.com/alternayte/drel/internal/ast"
 )
 
-// pkColumnsOf returns the primary key columns for a model. It prefers the
-// multi-column PKColumns and falls back to the single legacy PKColumn, so a
-// hand-written ModelMeta that predates composite keys keeps working.
-func pkColumnsOf(pkColumn string, pkColumns []string) []string {
-	if len(pkColumns) > 0 {
-		return pkColumns
-	}
-	return []string{pkColumn}
-}
-
 // keyValuesOf splits a primary key value into one value per key column. A nil
 // splitter means a single-column key, whose only value is the key itself.
 func keyValuesOf(kv func(any) []any, key any) []any {

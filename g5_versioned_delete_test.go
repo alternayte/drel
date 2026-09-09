@@ -25,7 +25,7 @@ type g5VerSnapshot struct{ Title string }
 var g5VerItemMeta = drel.ModelMeta[g5VerItem]{
 	Table:        "g5_ver_items",
 	Columns:      []string{"id", "title", "version", "created_at", "updated_at"},
-	PKColumn:     "id",
+	PKColumns:    []string{"id"},
 	HasVersioned: true,
 	VersionValue: func(p *g5VerItem) int { return p.Version },
 	SetVersion:   func(p *g5VerItem, v int) { p.Version = v },
@@ -64,7 +64,7 @@ type g5SoftVerSnapshot struct{ Title string }
 var g5SoftVerItemMeta = drel.ModelMeta[g5SoftVerItem]{
 	Table:         "g5_softver_items",
 	Columns:       []string{"id", "title", "deleted_at", "version", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	HasSoftDelete: true,
 	HasVersioned:  true,
 	VersionValue:  func(p *g5SoftVerItem) int { return p.Version },

@@ -129,7 +129,7 @@ func bulkInsertColumns(ctx context.Context, base *ModelMetaBase, entity any) ([]
 		if base.KeyIsZero != nil && base.KeyIsZero(entity) {
 			return nil, nil, fmt.Errorf("drel: bulk insert %s: app-assigned primary key is zero (no key generator registered and no key was set)", base.Table)
 		}
-		pkCols := pkColumnsOf(base.PKColumn, base.PKColumns)
+		pkCols := base.PKColumns
 		pkVals := keyValuesOf(base.KeyValues, base.PKValue(entity))
 		cols = append(append([]string(nil), pkCols...), cols...)
 		vals = append(append([]any(nil), pkVals...), vals...)

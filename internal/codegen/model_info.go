@@ -21,6 +21,15 @@ type ModelInfo struct {
 	Module string
 }
 
+// PKColumns returns the primary key column names in key order.
+//
+// TODO(task 5): this is a temporary shim that always returns the single
+// default column. It ignores any composite key shape scanned from the
+// model. Task 5 replaces this body with the real key shape.
+func (m ModelInfo) PKColumns() []string {
+	return []string{"id"}
+}
+
 type FieldInfo struct {
 	Name       string
 	GoType     string

@@ -89,7 +89,7 @@ func productNormalizeKey(v any) any {
 var ProductMeta = drel.ModelMeta[Product]{
 	Table:         "products",
 	Columns:       []string{"id", "name", "price", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanProduct,
 	Snapshot:      snapshotProduct,
 	Diff:          diffProduct,

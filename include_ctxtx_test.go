@@ -29,9 +29,9 @@ type uowMember struct {
 }
 
 var uowTeamMeta = drel.ModelMeta[uowTeam]{
-	Table:    "uow_teams",
-	Columns:  []string{"id", "name", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "uow_teams",
+	Columns:   []string{"id", "name", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*uowTeam, error) {
 		x := &uowTeam{}
 		err := row.Scan(&x.ID, &x.Name, &x.CreatedAt, &x.UpdatedAt)
@@ -63,9 +63,9 @@ var uowTeamMeta = drel.ModelMeta[uowTeam]{
 }
 
 var uowMemberMeta = drel.ModelMeta[uowMember]{
-	Table:    "uow_members",
-	Columns:  []string{"id", "team_id", "nick", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "uow_members",
+	Columns:   []string{"id", "team_id", "nick", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*uowMember, error) {
 		x := &uowMember{}
 		err := row.Scan(&x.ID, &x.TeamID, &x.Nick, &x.CreatedAt, &x.UpdatedAt)

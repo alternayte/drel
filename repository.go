@@ -6,11 +6,10 @@ import (
 
 // ModelMeta describes the database mapping for a model type T.
 type ModelMeta[T any] struct {
-	Table    string
-	Columns  []string
-	PKColumn string
-	// PKColumns lists every primary key column, in key order. When empty the
-	// single PKColumn is used. Generated code always sets it.
+	Table   string
+	Columns []string
+	// PKColumns lists every primary key column, in key order. Generated code
+	// always sets it.
 	PKColumns []string
 	// KeyValues splits a primary key value into one value per PKColumns entry,
 	// in the same order. When nil the key is a single value.
@@ -47,8 +46,7 @@ func ToMetaBase[T any](meta *ModelMeta[T]) *ModelMetaBase {
 	base := &ModelMetaBase{
 		Table:     meta.Table,
 		Columns:   meta.Columns,
-		PKColumn:  meta.PKColumn,
-		PKColumns: pkColumnsOf(meta.PKColumn, meta.PKColumns),
+		PKColumns: meta.PKColumns,
 		KeyValues: meta.KeyValues,
 		PKValue: func(entity any) any {
 			return meta.PKValue(entity.(*T))
@@ -144,7 +142,7 @@ func (r *Repository[T]) newBuilder() *QueryBuilder[T] {
 // Find looks up a single record by its primary key. For a composite key, id is
 // the model's key struct.
 func (r *Repository[T]) Find(ctx context.Context, id any) (*T, error) {
-	cols := pkColumnsOf(r.meta.PKColumn, r.meta.PKColumns)
+	cols := r.meta.PKColumns
 	return r.newBuilder().
 		Where(pkPredicate(cols, keyValuesOf(r.meta.KeyValues, id))).
 		First(ctx)

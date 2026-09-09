@@ -89,7 +89,7 @@ func postNormalizeKey(v any) any {
 var PostMeta = drel.ModelMeta[Post]{
 	Table:         "posts",
 	Columns:       []string{"id", "title", "author_id", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanPost,
 	Snapshot:      snapshotPost,
 	Diff:          diffPost,

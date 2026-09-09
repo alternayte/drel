@@ -51,9 +51,9 @@ type AuthorProfile struct {
 // --- ModelMeta definitions ---
 
 var authorMeta = drel.ModelMeta[Author]{
-	Table:    "authors",
-	Columns:  []string{"id", "name", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "authors",
+	Columns:   []string{"id", "name", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*Author, error) {
 		a := &Author{}
 		err := row.Scan(&a.ID, &a.Name, &a.CreatedAt, &a.UpdatedAt)
@@ -96,9 +96,9 @@ var authorMeta = drel.ModelMeta[Author]{
 }
 
 var bookMeta = drel.ModelMeta[Book]{
-	Table:    "books",
-	Columns:  []string{"id", "title", "author_id", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "books",
+	Columns:   []string{"id", "title", "author_id", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*Book, error) {
 		b := &Book{}
 		err := row.Scan(&b.ID, &b.Title, &b.AuthorID, &b.CreatedAt, &b.UpdatedAt)
@@ -143,9 +143,9 @@ var bookMeta = drel.ModelMeta[Book]{
 }
 
 var profileMeta = drel.ModelMeta[AuthorProfile]{
-	Table:    "author_profiles",
-	Columns:  []string{"id", "bio", "author_id", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "author_profiles",
+	Columns:   []string{"id", "bio", "author_id", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*AuthorProfile, error) {
 		p := &AuthorProfile{}
 		err := row.Scan(&p.ID, &p.Bio, &p.AuthorID, &p.CreatedAt, &p.UpdatedAt)
@@ -190,9 +190,9 @@ var profileMeta = drel.ModelMeta[AuthorProfile]{
 }
 
 var tagMeta = drel.ModelMeta[Tag]{
-	Table:    "tags",
-	Columns:  []string{"id", "label", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "tags",
+	Columns:   []string{"id", "label", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*Tag, error) {
 		t := &Tag{}
 		err := row.Scan(&t.ID, &t.Label, &t.CreatedAt, &t.UpdatedAt)
@@ -538,9 +538,9 @@ func TestIntegration_Include_FilterAware_SoftDelete(t *testing.T) {
 
 	// Create a book meta WITH soft delete filter and deleted_at column.
 	sdBookMeta := drel.ModelMeta[Book]{
-		Table:    "books",
-		Columns:  []string{"id", "title", "author_id", "deleted_at", "created_at", "updated_at"},
-		PKColumn: "id",
+		Table:     "books",
+		Columns:   []string{"id", "title", "author_id", "deleted_at", "created_at", "updated_at"},
+		PKColumns: []string{"id"},
 		Scan: func(row drel.Row) (*Book, error) {
 			b := &Book{}
 			var deletedAt *time.Time
@@ -640,9 +640,9 @@ func TestIntegration_Include_NestedManyToMany(t *testing.T) {
 		Name string
 	}
 	genreMeta := drel.ModelMeta[genre]{
-		Table:    "genres",
-		Columns:  []string{"id", "name"},
-		PKColumn: "id",
+		Table:     "genres",
+		Columns:   []string{"id", "name"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*genre, error) {
 			g := &genre{}
 			return g, r.Scan(&g.ID, &g.Name)

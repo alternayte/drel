@@ -80,7 +80,7 @@ func TestEmitModelFile_SimpleModel(t *testing.T) {
 	assert.Contains(t, out, "var ProductMeta = drel.ModelMeta[Product]{")
 	assert.Contains(t, out, `Table:   "products"`)
 	assert.Contains(t, out, `Columns: []string{"id", "name", "price", "in_stock", "created_at", "updated_at"}`)
-	assert.Contains(t, out, `PKColumn: "id"`)
+	assert.Contains(t, out, `PKColumns: []string{"id"}`)
 	assert.Contains(t, out, "Scan:          scanProduct,")
 	assert.Contains(t, out, "Snapshot:      snapshotProduct,")
 	assert.Contains(t, out, "Diff:          diffProduct,")

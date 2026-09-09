@@ -25,19 +25,19 @@ type routingChild struct {
 
 func routingParentMeta() *ModelMetaBase {
 	return &ModelMetaBase{
-		Table:    "parents",
-		Columns:  []string{"id"},
-		PKColumn: "id",
-		PKValue:  func(e any) any { return e.(*routingParent).ID },
+		Table:     "parents",
+		Columns:   []string{"id"},
+		PKColumns: []string{"id"},
+		PKValue:   func(e any) any { return e.(*routingParent).ID },
 	}
 }
 
 func routingChildMeta() *ModelMetaBase {
 	return &ModelMetaBase{
-		Table:    "children",
-		Columns:  []string{"id", "pid"},
-		PKColumn: "id",
-		PKValue:  func(e any) any { return e.(*routingChild).ID },
+		Table:     "children",
+		Columns:   []string{"id", "pid"},
+		PKColumns: []string{"id"},
+		PKValue:   func(e any) any { return e.(*routingChild).ID },
 		ColumnValue: func(e any, i int) any {
 			c := e.(*routingChild)
 			if i == 1 {
@@ -112,11 +112,11 @@ func TestIncludableQuery_Primary_ForcesPrimaryRoute(t *testing.T) {
 	e := &Engine{drv: primary, replicas: []driver.Driver{r1}, dia: dialectsqlite.New()}
 
 	meta := ModelMeta[routingParent]{
-		Table:    "parents",
-		Columns:  []string{"id"},
-		PKColumn: "id",
-		Scan:     func(Row) (*routingParent, error) { return &routingParent{}, nil },
-		PKValue:  func(p *routingParent) any { return p.ID },
+		Table:     "parents",
+		Columns:   []string{"id"},
+		PKColumns: []string{"id"},
+		Scan:      func(Row) (*routingParent, error) { return &routingParent{}, nil },
+		PKValue:   func(p *routingParent) any { return p.ID },
 	}
 	repo := NewRepository(e, meta)
 	q := repo.Include(routingHasManySpec()).Primary()

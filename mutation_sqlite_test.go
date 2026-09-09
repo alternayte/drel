@@ -28,9 +28,9 @@ type sqliteItemSnapshot struct {
 }
 
 var sqliteItemMeta = drel.ModelMeta[sqliteItem]{
-	Table:    "items",
-	Columns:  []string{"id", "title", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "items",
+	Columns:   []string{"id", "title", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*sqliteItem, error) {
 		p := &sqliteItem{}
 		err := row.Scan(&p.ID, &p.Title, &p.CreatedAt, &p.UpdatedAt)
@@ -249,9 +249,9 @@ type eventItem struct {
 type eventItemCreated struct{ Title string }
 
 var eventItemMeta = drel.ModelMeta[eventItem]{
-	Table:    "event_items",
-	Columns:  []string{"id", "title", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "event_items",
+	Columns:   []string{"id", "title", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*eventItem, error) {
 		p := &eventItem{}
 		idp, cap_, uap := p.ScanPtrs()

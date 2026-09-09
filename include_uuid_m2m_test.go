@@ -23,9 +23,9 @@ type umTag struct {
 
 func umUserMeta() drel.ModelMeta[umUser] {
 	return drel.ModelMeta[umUser]{
-		Table:    "um_users",
-		Columns:  []string{"id", "name"},
-		PKColumn: "id",
+		Table:     "um_users",
+		Columns:   []string{"id", "name"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*umUser, error) {
 			u := &umUser{}
 			var id string
@@ -55,9 +55,9 @@ func umUserMeta() drel.ModelMeta[umUser] {
 
 func umTagMeta() drel.ModelMeta[umTag] {
 	return drel.ModelMeta[umTag]{
-		Table:    "um_tags",
-		Columns:  []string{"id", "label"},
-		PKColumn: "id",
+		Table:     "um_tags",
+		Columns:   []string{"id", "label"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*umTag, error) {
 			tg := &umTag{}
 			var id string

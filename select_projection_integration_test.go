@@ -21,9 +21,9 @@ type pgProjRow struct {
 }
 
 var pgProjMeta = drel.ModelMeta[pgProjRow]{
-	Table:    "proj_products",
-	Columns:  []string{"id", "name", "category", "price"},
-	PKColumn: "id",
+	Table:     "proj_products",
+	Columns:   []string{"id", "name", "category", "price"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*pgProjRow, error) {
 		p := &pgProjRow{}
 		err := row.Scan(&p.ID, &p.Name, &p.Category, &p.Price)

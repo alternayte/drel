@@ -19,7 +19,7 @@ func akBulkOrderMeta() drel.ModelMeta[akBulkOrder] {
 	return drel.ModelMeta[akBulkOrder]{
 		Table:       "ak_orders",
 		Columns:     []string{"id", "name", "created_at", "updated_at"},
-		PKColumn:    "id",
+		PKColumns:   []string{"id"},
 		KeyStrategy: drel.KeyAppAssigned,
 		GenerateKey: drel.UUIDv7Key,
 		SetKey:      func(p *akBulkOrder, k any) { p.SetID(k.(uuid.UUID)) },

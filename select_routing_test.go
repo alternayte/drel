@@ -19,11 +19,11 @@ type routingGroupDTO struct {
 
 func routingModelMeta() ModelMeta[routingParent] {
 	return ModelMeta[routingParent]{
-		Table:    "parents",
-		Columns:  []string{"id", "name"},
-		PKColumn: "id",
-		Scan:     func(Row) (*routingParent, error) { return &routingParent{}, nil },
-		PKValue:  func(p *routingParent) any { return p.ID },
+		Table:     "parents",
+		Columns:   []string{"id", "name"},
+		PKColumns: []string{"id"},
+		Scan:      func(Row) (*routingParent, error) { return &routingParent{}, nil },
+		PKValue:   func(p *routingParent) any { return p.ID },
 	}
 }
 

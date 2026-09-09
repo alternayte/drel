@@ -28,7 +28,7 @@ type vpSnapshot struct {
 var VersionedProductMeta = drel.ModelMeta[VersionedProduct]{
 	Table:        "v_products",
 	Columns:      []string{"id", "name", "price", "version", "created_at", "updated_at"},
-	PKColumn:     "id",
+	PKColumns:    []string{"id"},
 	HasVersioned: true,
 	VersionValue: func(p *VersionedProduct) int { return p.Version() },
 	SetVersion:   func(p *VersionedProduct, v int) { *p.VersionPtr() = v },

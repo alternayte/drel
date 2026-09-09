@@ -223,9 +223,9 @@ type upsertItem struct {
 
 func upsertItemMeta() drel.ModelMeta[upsertItem] {
 	return drel.ModelMeta[upsertItem]{
-		Table:    "upsert_items",
-		Columns:  []string{"id", "sku", "region", "name", "qty"},
-		PKColumn: "id",
+		Table:     "upsert_items",
+		Columns:   []string{"id", "sku", "region", "name", "qty"},
+		PKColumns: []string{"id"},
 		Scan: func(row drel.Row) (*upsertItem, error) {
 			p := &upsertItem{}
 			if err := row.Scan(&p.ID, &p.SKU, &p.Region, &p.Name, &p.Qty); err != nil {

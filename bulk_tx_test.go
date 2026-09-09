@@ -60,9 +60,9 @@ type txUpsertItem struct {
 }
 
 var txUpsertItemMeta = drel.ModelMeta[txUpsertItem]{
-	Table:    "tx_upsert_items",
-	Columns:  []string{"id", "title"},
-	PKColumn: "id",
+	Table:     "tx_upsert_items",
+	Columns:   []string{"id", "title"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*txUpsertItem, error) {
 		x := &txUpsertItem{}
 		return x, row.Scan(&x.ID, &x.Title)

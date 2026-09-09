@@ -24,10 +24,10 @@ type g5AuditItem struct {
 type g5AuditSnapshot struct{ Title string }
 
 var g5AuditItemMeta = drel.ModelMeta[g5AuditItem]{
-	Table:    "g5_audit_items",
-	Columns:  []string{"id", "title", "created_by", "updated_by", "created_at", "updated_at"},
-	PKColumn: "id",
-	HasAudit: true,
+	Table:     "g5_audit_items",
+	Columns:   []string{"id", "title", "created_by", "updated_by", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
+	HasAudit:  true,
 	AuditSetCreate: func(p *g5AuditItem, actor string) {
 		p.CreatedBy = actor
 		p.UpdatedBy = actor

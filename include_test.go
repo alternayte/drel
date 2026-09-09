@@ -106,7 +106,7 @@ func TestToMetaBase_CopiesFilters(t *testing.T) {
 	meta := &ModelMeta[testModel]{
 		Table:         "test",
 		Columns:       []string{"id"},
-		PKColumn:      "id",
+		PKColumns:     []string{"id"},
 		Scan:          func(Row) (*testModel, error) { return nil, nil },
 		Snapshot:      func(*testModel) any { return nil },
 		Diff:          func(*testModel, any) []FieldChange { return nil },

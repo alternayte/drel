@@ -52,13 +52,13 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 			}
 			// Include the (already-stamped) PK in the INSERT and read back only
 			// the DB-generated timestamps — never the id.
-			insertPKCols := pkColumnsOf(te.meta.PKColumn, te.meta.PKColumns)
+			insertPKCols := te.meta.PKColumns
 			insertPKVals := keyValuesOf(te.meta.KeyValues, te.meta.PKValue(te.entity))
 			cols = append(append([]string(nil), insertPKCols...), cols...)
 			vals = append(append([]any(nil), insertPKVals...), vals...)
 		}
 
-		pkCols := pkColumnsOf(te.meta.PKColumn, te.meta.PKColumns)
+		pkCols := te.meta.PKColumns
 		returning := append(append([]string(nil), pkCols...), "created_at", "updated_at")
 		scan := te.meta.ScanReturning
 		if appAssigned {
@@ -125,7 +125,7 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 			}
 			cvs[i] = dialect.ColumnValue{Column: c.Column, Value: val}
 		}
-		pkCols := pkColumnsOf(te.meta.PKColumn, te.meta.PKColumns)
+		pkCols := te.meta.PKColumns
 		pkVal := te.meta.PKValue(te.entity)
 		pkVals := keyValuesOf(te.meta.KeyValues, pkVal)
 
@@ -156,7 +156,7 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 	}
 
 	for _, te := range pc.Deleted {
-		pkCols := pkColumnsOf(te.meta.PKColumn, te.meta.PKColumns)
+		pkCols := te.meta.PKColumns
 		pkVal := te.meta.PKValue(te.entity)
 		pkVals := keyValuesOf(te.meta.KeyValues, pkVal)
 		versioned := te.meta.HasVersioned && te.meta.VersionValue != nil

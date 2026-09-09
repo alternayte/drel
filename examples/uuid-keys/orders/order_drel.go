@@ -100,7 +100,7 @@ func orderScanGenerated(p *Order, row drel.Row) error {
 var OrderMeta = drel.ModelMeta[Order]{
 	Table:         "orders",
 	Columns:       []string{"id", "customer", "total", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanOrder,
 	Snapshot:      snapshotOrder,
 	Diff:          diffOrder,

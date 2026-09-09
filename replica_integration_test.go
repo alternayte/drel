@@ -46,9 +46,9 @@ type replicaRow struct {
 }
 
 var replicaRowMeta = drel.ModelMeta[replicaRow]{
-	Table:    "rep_t",
-	Columns:  []string{"id", "v"},
-	PKColumn: "id",
+	Table:     "rep_t",
+	Columns:   []string{"id", "v"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*replicaRow, error) {
 		r := &replicaRow{}
 		return r, row.Scan(&r.ID, &r.V)
@@ -102,9 +102,9 @@ type repChild struct {
 }
 
 var repParentMeta = drel.ModelMeta[repParent]{
-	Table:    "rip_parent",
-	Columns:  []string{"id", "name"},
-	PKColumn: "id",
+	Table:     "rip_parent",
+	Columns:   []string{"id", "name"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*repParent, error) {
 		p := &repParent{}
 		return p, row.Scan(&p.ID, &p.Name)
@@ -114,9 +114,9 @@ var repParentMeta = drel.ModelMeta[repParent]{
 }
 
 var repChildMeta = drel.ModelMeta[repChild]{
-	Table:    "rip_child",
-	Columns:  []string{"id", "pid"},
-	PKColumn: "id",
+	Table:     "rip_child",
+	Columns:   []string{"id", "pid"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*repChild, error) {
 		c := &repChild{}
 		return c, row.Scan(&c.ID, &c.PID)

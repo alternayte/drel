@@ -22,9 +22,9 @@ type productSnapshot struct {
 }
 
 var ProductMeta = drel.ModelMeta[Product]{
-	Table:    "products",
-	Columns:  []string{"id", "name", "price", "in_stock", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "products",
+	Columns:   []string{"id", "name", "price", "in_stock", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*Product, error) {
 		p := &Product{}
 		err := row.Scan(&p.ID, &p.Name, &p.Price, &p.InStock, &p.CreatedAt, &p.UpdatedAt)

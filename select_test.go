@@ -28,9 +28,9 @@ type selectProductSnapshot struct {
 }
 
 var selectProductMeta = drel.ModelMeta[selectProduct]{
-	Table:    "products",
-	Columns:  []string{"id", "name", "category", "price", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "products",
+	Columns:   []string{"id", "name", "category", "price", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*selectProduct, error) {
 		p := &selectProduct{}
 		err := row.Scan(&p.ID, &p.Name, &p.Category, &p.Price, &p.CreatedAt, &p.UpdatedAt)

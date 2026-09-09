@@ -772,7 +772,11 @@ func emitMeta(b *strings.Builder, m ModelInfo, lower, varPlural string, allCols 
 		quoted[i] = fmt.Sprintf("%q", c)
 	}
 	b.WriteString(fmt.Sprintf("\tColumns: []string{%s},\n", strings.Join(quoted, ", ")))
-	b.WriteString("\tPKColumn: \"id\",\n")
+	pkQuoted := make([]string, len(m.PKColumns()))
+	for i, c := range m.PKColumns() {
+		pkQuoted[i] = fmt.Sprintf("%q", c)
+	}
+	b.WriteString(fmt.Sprintf("\tPKColumns: []string{%s},\n", strings.Join(pkQuoted, ", ")))
 	b.WriteString(fmt.Sprintf("\tScan:          scan%s,\n", exportName(lower)))
 	b.WriteString(fmt.Sprintf("\tSnapshot:      snapshot%s,\n", exportName(lower)))
 	b.WriteString(fmt.Sprintf("\tDiff:          diff%s,\n", exportName(lower)))

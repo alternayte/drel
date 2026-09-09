@@ -365,7 +365,7 @@ func (r *TxRepository[T]) AsNoTracking() *TxQueryBuilder[T] {
 // composite key, id is the model's key struct.
 func (r *TxRepository[T]) Find(ctx context.Context, id any) (*T, error) {
 	qb := newTxQueryBuilder(r.tx, &r.meta, r.base)
-	cols := pkColumnsOf(r.meta.PKColumn, r.meta.PKColumns)
+	cols := r.meta.PKColumns
 	return qb.Where(pkPredicate(cols, keyValuesOf(r.meta.KeyValues, id))).First(ctx)
 }
 
@@ -673,7 +673,7 @@ func (q *TxQueryBuilder[T]) Page(ctx context.Context) (*CursorPage[T], error) {
 		return nil, ErrInvalidPageSize
 	}
 	pageSize := *q.limit
-	order := cursorOrder(q.orderBy, pkColumnsOf(q.meta.PKColumn, q.meta.PKColumns))
+	order := cursorOrder(q.orderBy, q.meta.PKColumns)
 
 	backward := q.before != nil
 	queryOrder := order

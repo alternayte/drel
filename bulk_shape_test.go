@@ -17,9 +17,9 @@ type shapeRow struct {
 
 func shapeRowMeta() ModelMeta[shapeRow] {
 	return ModelMeta[shapeRow]{
-		Table:    "shape",
-		Columns:  []string{"id", "name", "extra"},
-		PKColumn: "id",
+		Table:     "shape",
+		Columns:   []string{"id", "name", "extra"},
+		PKColumns: []string{"id"},
 		Scan: func(r Row) (*shapeRow, error) {
 			s := &shapeRow{}
 			return s, r.Scan(&s.ID, &s.Name, &s.Extra)

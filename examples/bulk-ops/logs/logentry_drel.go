@@ -89,7 +89,7 @@ func logentryNormalizeKey(v any) any {
 var LogEntryMeta = drel.ModelMeta[LogEntry]{
 	Table:         "log_entries",
 	Columns:       []string{"id", "level", "message", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanLogentry,
 	Snapshot:      snapshotLogentry,
 	Diff:          diffLogentry,
