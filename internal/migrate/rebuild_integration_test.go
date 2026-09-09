@@ -40,6 +40,9 @@ func assertScalarInt(t *testing.T, drv driver.Driver, query string, want int64) 
 	assert.Equal(t, want, got, query)
 }
 
+// notesTable is the shape under rebuild. It deliberately carries a primary
+// key, a plain index, a UNIQUE index and a composite index, because the spec
+// requires the rebuild to reproduce every one of them.
 func notesTable(bodyNotNull bool) codegen.Table {
 	return codegen.Table{
 		Name: "notes",
@@ -47,9 +50,24 @@ func notesTable(bodyNotNull bool) codegen.Table {
 			{Name: "id", Type: "INTEGER PRIMARY KEY AUTOINCREMENT", NotNull: true, PK: true},
 			{Name: "body", Type: "TEXT", NotNull: bodyNotNull},
 			{Name: "tag", Type: "TEXT", NotNull: true},
+			{Name: "slug", Type: "TEXT", NotNull: true},
+			{Name: "author", Type: "TEXT", NotNull: true},
+			{Name: "year", Type: "INTEGER", NotNull: true},
 		},
-		Indexes: []codegen.Index{{Name: "idx_notes_tag", Columns: []string{"tag"}}},
+		Indexes: []codegen.Index{
+			{Name: "idx_notes_tag", Columns: []string{"tag"}},
+			{Name: "uq_notes_slug", Columns: []string{"slug"}, Unique: true},
+			{Name: "idx_notes_author_year", Columns: []string{"author", "year"}},
+		},
 	}
+}
+
+// scalarString returns the single text value a query selects.
+func scalarString(t *testing.T, drv driver.Driver, query string) string {
+	t.Helper()
+	var got string
+	require.NoError(t, drv.QueryRow(context.Background(), query).Scan(&got), query)
+	return got
 }
 
 func TestSQLiteRebuild_AppliesUpAndDownAndKeepsTheData(t *testing.T) {
@@ -64,13 +82,58 @@ func TestSQLiteRebuild_AppliesUpAndDownAndKeepsTheData(t *testing.T) {
 	_, err := drv.Exec(ctx, `CREATE TABLE notes (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		body TEXT,
-		tag TEXT NOT NULL
+		tag TEXT NOT NULL,
+		slug TEXT NOT NULL,
+		author TEXT NOT NULL,
+		year INTEGER NOT NULL
 	)`)
 	require.NoError(t, err)
 	_, err = drv.Exec(ctx, `CREATE INDEX idx_notes_tag ON notes (tag)`)
 	require.NoError(t, err)
-	_, err = drv.Exec(ctx, `INSERT INTO notes (body, tag) VALUES ('hello', 'a')`)
+	_, err = drv.Exec(ctx, `CREATE UNIQUE INDEX uq_notes_slug ON notes (slug)`)
 	require.NoError(t, err)
+	_, err = drv.Exec(ctx, `CREATE INDEX idx_notes_author_year ON notes (author, year)`)
+	require.NoError(t, err)
+	_, err = drv.Exec(ctx,
+		`INSERT INTO notes (body, tag, slug, author, year) VALUES ('hello', 'a', 's1', 'ann', 2020)`)
+	require.NoError(t, err)
+
+	// assertEveryIndexSurvives proves each index is present AND still enforces.
+	// Presence in sqlite_master alone would not show that UNIQUE survived.
+	assertEveryIndexSurvives := func(stage string) {
+		t.Helper()
+
+		assertScalarInt(t, drv,
+			`SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_notes_tag'`, 1)
+
+		// The UNIQUE index must survive as unique, not as a plain index.
+		assertScalarInt(t, drv,
+			`SELECT count(*) FROM sqlite_master WHERE type='index' AND name='uq_notes_slug'`, 1)
+		assertScalarInt(t, drv,
+			`SELECT "unique" FROM pragma_index_list('notes') WHERE name='uq_notes_slug'`, 1)
+		assert.Equal(t, "slug", scalarString(t, drv,
+			`SELECT group_concat(name) FROM pragma_index_info('uq_notes_slug')`),
+			stage+": the UNIQUE index must still cover slug")
+
+		// The composite index must keep both columns, in order. This reads
+		// the indexed columns from the pragma rather than the CREATE INDEX
+		// text: the index name itself contains both column names, so a
+		// substring test on the SQL text would pass even for a one-column
+		// index.
+		assert.Equal(t, "author,year", scalarString(t, drv,
+			`SELECT group_concat(name) FROM pragma_index_info('idx_notes_author_year')`),
+			stage+": the composite index must keep both columns, in order")
+
+		// Behaviour, not presence: a duplicate slug must be rejected.
+		_, dupErr := drv.Exec(ctx,
+			`INSERT INTO notes (body, tag, slug, author, year) VALUES ('dup', 'a', 's1', 'ann', 2020)`)
+		assert.Error(t, dupErr, stage+": the UNIQUE index must still reject a duplicate slug")
+
+		// The primary key must survive and still reject a duplicate key.
+		_, pkErr := drv.Exec(ctx,
+			`INSERT INTO notes (id, body, tag, slug, author, year) VALUES (1, 'dup', 'a', 's2', 'ann', 2020)`)
+		assert.Error(t, pkErr, stage+": the primary key must still reject a duplicate id")
+	}
 
 	up, down, err := codegen.DiffSchemas(oldSchema, newSchema, "sqlite")
 	require.NoError(t, err)
@@ -86,17 +149,20 @@ func TestSQLiteRebuild_AppliesUpAndDownAndKeepsTheData(t *testing.T) {
 	assert.Equal(t, 1, n)
 
 	assertScalarString(t, drv, `SELECT body FROM notes WHERE tag = 'a'`, "hello")
-	assertScalarInt(t, drv, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_notes_tag'`, 1)
 	assertScalarInt(t, drv, `SELECT count(*) FROM sqlite_master WHERE name LIKE '%__drel_new'`, 0)
+	assertEveryIndexSurvives("after up")
 
-	_, err = drv.Exec(ctx, `INSERT INTO notes (body, tag) VALUES (NULL, 'b')`)
+	_, err = drv.Exec(ctx,
+		`INSERT INTO notes (body, tag, slug, author, year) VALUES (NULL, 'b', 's3', 'bob', 2021)`)
 	assert.Error(t, err, "the rebuild must have applied the NOT NULL constraint")
 
 	require.NoError(t, runner.Down(ctx))
 	assertScalarString(t, drv, `SELECT body FROM notes WHERE tag = 'a'`, "hello")
-	assertScalarInt(t, drv, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_notes_tag'`, 1)
+	assertEveryIndexSurvives("after down")
 
-	_, err = drv.Exec(ctx, `INSERT INTO notes (body, tag) VALUES (NULL, 'b')`)
+	// After the down migration, body accepts NULL again.
+	_, err = drv.Exec(ctx,
+		`INSERT INTO notes (body, tag, slug, author, year) VALUES (NULL, 'b', 's4', 'bob', 2021)`)
 	assert.NoError(t, err)
 }
 
