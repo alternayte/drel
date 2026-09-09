@@ -91,3 +91,77 @@ func TestDiffSchemas_TwoColumnsClaimingTheSameOldNameIsRejected(t *testing.T) {
 
 // indexOf returns the byte offset of sub in s, or -1.
 func indexOf(s, sub string) int { return strings.Index(s, sub) }
+
+func TestDiffSchemas_TableRenameEmitsRenameNotDropAndCreate(t *testing.T) {
+	old := Schema{Tables: []Table{pgTable("purchases",
+		Column{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true},
+	)}}
+	new := Schema{Tables: []Table{{
+		Name:        "orders",
+		RenamedFrom: "purchases",
+		Columns: []Column{
+			{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true},
+		},
+	}}}
+
+	up, down, err := DiffSchemas(old, new, "postgres")
+	require.NoError(t, err)
+	assert.Equal(t, `ALTER TABLE "purchases" RENAME TO "orders";`, up)
+	assert.Equal(t, `ALTER TABLE "orders" RENAME TO "purchases";`, down)
+	assert.NotContains(t, up, "DROP TABLE")
+	assert.NotContains(t, up, "CREATE TABLE")
+}
+
+func TestDiffSchemas_TableAndColumnRenameTogetherAreOrdered(t *testing.T) {
+	old := Schema{Tables: []Table{pgTable("purchases",
+		Column{Name: "total", Type: "integer", NotNull: true},
+	)}}
+	new := Schema{Tables: []Table{{
+		Name:        "orders",
+		RenamedFrom: "purchases",
+		Columns: []Column{
+			{Name: "total_cents", Type: "integer", NotNull: true, RenamedFrom: "total"},
+		},
+	}}}
+
+	up, _, err := DiffSchemas(old, new, "postgres")
+	require.NoError(t, err)
+	tableAt := indexOf(up, "RENAME TO")
+	colAt := indexOf(up, "RENAME COLUMN")
+	assert.Less(t, tableAt, colAt, "the table rename must precede the column rename")
+	assert.Contains(t, up, `ALTER TABLE "orders" RENAME COLUMN "total" TO "total_cents";`)
+}
+
+func TestDiffSchemas_StaleTableMarkerIsIgnored(t *testing.T) {
+	old := Schema{Tables: []Table{pgTable("orders",
+		Column{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true},
+	)}}
+	new := Schema{Tables: []Table{{
+		Name:        "orders",
+		RenamedFrom: "purchases",
+		Columns: []Column{
+			{Name: "id", Type: "SERIAL PRIMARY KEY", NotNull: true, PK: true},
+		},
+	}}}
+
+	up, down, err := DiffSchemas(old, new, "postgres")
+	require.NoError(t, err)
+	assert.Equal(t, "", up)
+	assert.Equal(t, "", down)
+}
+
+func TestDiffSchemas_AmbiguousTableMarkerIsRejected(t *testing.T) {
+	old := Schema{Tables: []Table{
+		pgTable("purchases", Column{Name: "id", Type: "integer", NotNull: true}),
+		pgTable("orders", Column{Name: "id", Type: "integer", NotNull: true}),
+	}}
+	new := Schema{Tables: []Table{{
+		Name:        "orders",
+		RenamedFrom: "purchases",
+		Columns:     []Column{{Name: "id", Type: "integer", NotNull: true}},
+	}}}
+
+	_, _, err := DiffSchemas(old, new, "postgres")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous")
+}

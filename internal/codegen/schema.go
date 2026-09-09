@@ -304,6 +304,41 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string, 
 	oldTables := indexTables(old.Tables)
 	newTables := indexTables(newSchema.Tables)
 
+	tableRenames, err := resolveTableRenames(old, newSchema)
+	if err != nil {
+		return "", "", err
+	}
+	for _, ot := range old.Tables { // old-schema order, for a stable diff
+		nn, renamed := tableRenames[ot.Name]
+		if !renamed {
+			continue
+		}
+		up = append(up, fmt.Sprintf("ALTER TABLE %s RENAME TO %s;",
+			quoteIdent(ot.Name), quoteIdent(nn)))
+		down = append(down, fmt.Sprintf("ALTER TABLE %s RENAME TO %s;",
+			quoteIdent(nn), quoteIdent(ot.Name)))
+	}
+
+	// Re-index the old tables under their new names so the passes below treat a
+	// renamed table as present in both schemas.
+	for oldName, newName := range tableRenames {
+		t := oldTables[oldName]
+		t.Name = newName
+		oldTables[newName] = t
+		delete(oldTables, oldName)
+	}
+
+	// A slice copy of old.Tables with renamed entries relabelled, for the passes
+	// below that iterate the slice (rather than the oldTables map) and would
+	// otherwise treat a renamed table as dropped.
+	oldTablesSlice := make([]Table, len(old.Tables))
+	copy(oldTablesSlice, old.Tables)
+	for i := range oldTablesSlice {
+		if nn, renamed := tableRenames[oldTablesSlice[i].Name]; renamed {
+			oldTablesSlice[i].Name = nn
+		}
+	}
+
 	// 1. New enums (Postgres only).
 	if dialect != "sqlite" {
 		for _, e := range newSchema.Enums {
@@ -331,7 +366,7 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string, 
 	// that child/pivot tables (which hold REFERENCES to parents) are dropped
 	// before the parent tables they reference. Without this ordering, Postgres
 	// refuses to drop a parent table while its FK referents still exist.
-	droppedTables := fkSafeDropOrder(old.Tables, newTables)
+	droppedTables := fkSafeDropOrder(oldTablesSlice, newTables)
 	for _, t := range droppedTables {
 		up = append(up, fmt.Sprintf("DROP TABLE IF EXISTS %s;", quoteIdent(t.Name)))
 		down = append(down, strings.TrimRight(createTableSQL(t, dialect), "\n"))
@@ -389,6 +424,38 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string, 
 		down[i], down[j] = down[j], down[i]
 	}
 	return strings.Join(up, "\n"), strings.Join(down, "\n"), nil
+}
+
+// resolveTableRenames matches each new table that declares a RenamedFrom marker
+// against the old schema, and returns a map from old table name to new table
+// name. The stale and ambiguous rules match resolveColumnRenames.
+func resolveTableRenames(old, new Schema) (map[string]string, error) {
+	oldTables := indexTables(old.Tables)
+	renames := make(map[string]string)
+	claimed := make(map[string]string)
+
+	for _, nt := range new.Tables {
+		if nt.RenamedFrom == "" {
+			continue
+		}
+		if _, exists := oldTables[nt.RenamedFrom]; !exists {
+			continue // spent marker
+		}
+		if _, alsoExists := oldTables[nt.Name]; alsoExists {
+			return nil, fmt.Errorf(
+				"codegen: ambiguous rename: table %q says renamed_from=%q, but both %q and %q already exist; "+
+					"remove the marker, or drop one of the tables first",
+				nt.Name, nt.RenamedFrom, nt.RenamedFrom, nt.Name)
+		}
+		if prev, dup := claimed[nt.RenamedFrom]; dup {
+			return nil, fmt.Errorf(
+				"codegen: tables %q and %q both declare renamed_from=%q; a table can be renamed to one name only",
+				prev, nt.Name, nt.RenamedFrom)
+		}
+		claimed[nt.RenamedFrom] = nt.Name
+		renames[nt.RenamedFrom] = nt.Name
+	}
+	return renames, nil
 }
 
 // resolveColumnRenames matches each new column that declares a RenamedFrom
