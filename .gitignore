@@ -38,6 +38,9 @@ db/drel_gen.go
 # ...but the bundled examples ship their generated code so they compile.
 !examples/**/*_drel.go
 !examples/**/db/drel_gen.go
+# ...and the composite-key test models ship their generated code, because the
+# integration tests exercise the emitter's own output.
+!internal/testmodels/*_drel.go
 
 # Compiled example binaries (from `go build .` in an example dir)
 examples/sqlite-todo/sqlite-todo
