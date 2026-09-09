@@ -79,3 +79,71 @@ func TestValidateModels_Valid(t *testing.T) {
 
 	require.NoError(t, ValidateModels(models))
 }
+
+func compositeKeyModel() ModelInfo {
+	return ModelInfo{
+		Name:      "OrderLine",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+}
+
+func TestValidateCompositeKeys_RejectsARelationshipToACompositeKeyTarget(t *testing.T) {
+	invoice := ModelInfo{
+		Name:      "Invoice",
+		TableName: "invoices",
+		PKType:    "int",
+		Key:       []KeyColumn{{ColumnName: "id", GoType: "int"}},
+		Fields: []FieldInfo{{
+			Name:       "Lines",
+			IsExported: true,
+			Relation:   &RelationFieldInfo{Type: "has_many", TargetModel: "OrderLine", FK: "invoice_id"},
+		}},
+	}
+	err := validateCompositeKeys([]ModelInfo{invoice, compositeKeyModel()})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Invoice.Lines")
+	assert.Contains(t, err.Error(), "OrderLine")
+	assert.Contains(t, err.Error(), "composite primary key")
+}
+
+func TestValidateCompositeKeys_AllowsACompositeKeyModelToPointAtASingleKeyModel(t *testing.T) {
+	line := compositeKeyModel()
+	line.Fields = []FieldInfo{{
+		Name:       "Invoice",
+		IsExported: true,
+		Relation:   &RelationFieldInfo{Type: "belongs_to", TargetModel: "Invoice", FK: "invoice_id"},
+	}}
+	invoice := ModelInfo{
+		Name: "Invoice", TableName: "invoices", PKType: "int",
+		Key: []KeyColumn{{ColumnName: "id", GoType: "int"}},
+	}
+	assert.NoError(t, validateCompositeKeys([]ModelInfo{line, invoice}))
+}
+
+func TestValidateCompositeKeys_RejectsDuplicateKeyColumnNames(t *testing.T) {
+	m := compositeKeyModel()
+	m.Key[1].ColumnName = "order_id"
+	err := validateCompositeKeys([]ModelInfo{m})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "order_id")
+}
+
+func TestValidateCompositeKeys_RejectsAKeyColumnThatCollidesWithAField(t *testing.T) {
+	m := compositeKeyModel()
+	m.Fields = []FieldInfo{{Name: "OrderID", ColumnName: "order_id", GoType: "int", IsExported: true}}
+	err := validateCompositeKeys([]ModelInfo{m})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "order_id")
+}
+
+func TestValidateCompositeKeys_PassesForAPlainSingleKeyModel(t *testing.T) {
+	m := ModelInfo{Name: "User", TableName: "users", PKType: "int",
+		Key: []KeyColumn{{ColumnName: "id", GoType: "int"}}}
+	assert.NoError(t, validateCompositeKeys([]ModelInfo{m}))
+}

@@ -56,5 +56,65 @@ func ValidateModels(models []ModelInfo) error {
 		}
 	}
 
+	return validateCompositeKeys(models)
+}
+
+// validateCompositeKeys enforces the two limits drel accepts for composite
+// primary keys. Both fail at generation time rather than emitting SQL that is
+// silently wrong.
+//
+//  1. A composite-key model cannot be the target of a relationship. A foreign
+//     key to it would be a multi-column foreign key, which drel does not yet
+//     emit; columnDefSQL always references the target's single key column.
+//     The runtime include path depends on the same guarantee: it loads a
+//     relationship target by RelatedMeta.PKColumns[0].
+//  2. A composite key's column names must be unique within the model, and must
+//     not collide with a non-key column.
+//
+// The second accepted limit, that a composite key cannot be auto-increment,
+// needs no check here: the emitter always takes the app-assigned branch for a
+// struct key, so the combination is not constructible.
+func validateCompositeKeys(models []ModelInfo) error {
+	composite := make(map[string]bool, len(models))
+	for _, m := range models {
+		if m.IsCompositeKey() {
+			composite[m.Name] = true
+		}
+	}
+
+	for _, m := range models {
+		for _, f := range m.Fields {
+			if f.Relation == nil {
+				continue
+			}
+			if composite[f.Relation.TargetModel] {
+				return fmt.Errorf(
+					"drel: %s.%s: model %s has a composite primary key and cannot be the target of a relationship; "+
+						"multi-column foreign keys are not yet supported. Give %s a single surrogate key, or drop the relationship",
+					m.Name, f.Name, f.Relation.TargetModel, f.Relation.TargetModel)
+			}
+		}
+
+		seen := make(map[string]string, len(m.Key))
+		for _, kc := range m.Key {
+			if prev, dup := seen[kc.ColumnName]; dup {
+				return fmt.Errorf(
+					"drel: model %s: key fields %s and %s both map to column %q; give them distinct db tags",
+					m.Name, prev, kc.FieldName, kc.ColumnName)
+			}
+			seen[kc.ColumnName] = kc.FieldName
+		}
+		for _, f := range columnFields(m.Fields) {
+			col := f.ColumnName
+			if col == "" {
+				col = toSnakeCase(f.Name)
+			}
+			if keyField, clash := seen[col]; clash {
+				return fmt.Errorf(
+					"drel: model %s: field %s maps to column %q, which is already a key column (key field %s)",
+					m.Name, f.Name, col, keyField)
+			}
+		}
+	}
 	return nil
 }
