@@ -79,7 +79,7 @@ func (e *Engine) UseOutbox(table string, opts ...OutboxOption) {
 }
 
 func defaultOutboxMapper(ev any) (OutboxMessage, bool) {
-	name, err := eventTypeName(ev)
+	name, err := EventTypeName(ev)
 	if err != nil {
 		// Surface as a message whose Type is empty so UseOutbox can detect and
 		// fail loudly; the mapper signature cannot return an error directly.
@@ -94,10 +94,13 @@ func defaultOutboxMapper(ev any) (OutboxMessage, bool) {
 // route. Provide a WithOutboxMapper to map anonymous events explicitly.
 var ErrOutboxAnonymousEvent = errors.New("drel: outbox event has no qualified type name (nil or anonymous type)")
 
-// eventTypeName returns the package-qualified Go type name of an event value
-// (PkgPath + "." + Name), unwrapping a pointer. It returns ErrOutboxAnonymousEvent
-// for nil or anonymous types (which have an empty Name).
-func eventTypeName(v any) (string, error) {
+// EventTypeName returns the package-qualified Go type name of an event value
+// (PkgPath + "." + Name), unwrapping a pointer. The outbox and the event store
+// name an event the same way, so one event carries one name everywhere.
+//
+// It returns ErrOutboxAnonymousEvent for a nil value or an anonymous type,
+// which have no name a consumer can route on.
+func EventTypeName(v any) (string, error) {
 	t := reflect.TypeOf(v)
 	if t == nil {
 		return "", ErrOutboxAnonymousEvent

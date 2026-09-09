@@ -138,24 +138,24 @@ func TestOutbox_RollbackDiscardsMessages(t *testing.T) {
 func TestEventTypeName_QualifiesPackagePath(t *testing.T) {
 	// Two event types named the same in different packages must not collide:
 	// the qualified name includes the package path.
-	name, err := drel.EventTypeNameForTest(itemCreated{Name: "x"})
+	name, err := drel.EventTypeName(itemCreated{Name: "x"})
 	require.NoError(t, err)
 	assert.Equal(t, "github.com/alternayte/drel_test.itemCreated", name)
 
 	// Pointer receiver unwraps to the same qualified name.
-	name, err = drel.EventTypeNameForTest(&itemCreated{Name: "x"})
+	name, err = drel.EventTypeName(&itemCreated{Name: "x"})
 	require.NoError(t, err)
 	assert.Equal(t, "github.com/alternayte/drel_test.itemCreated", name)
 }
 
 func TestEventTypeName_RejectsAnonymousAndNil(t *testing.T) {
 	// nil maps to no type and must error rather than producing "".
-	_, err := drel.EventTypeNameForTest(nil)
+	_, err := drel.EventTypeName(nil)
 	require.Error(t, err)
 
 	// An anonymous struct has an empty Name() and must error.
 	anon := struct{ X int }{X: 1}
-	_, err = drel.EventTypeNameForTest(anon)
+	_, err = drel.EventTypeName(anon)
 	require.Error(t, err)
 }
 

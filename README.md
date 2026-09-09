@@ -139,6 +139,13 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   transaction and rolls it back. The transaction travels in the context, so the
   code under test joins it. On Postgres the tests can run in parallel against
   one database.
+- **Event store** -- `drel/es` appends events to a stream inside the caller's
+  transaction, so the events and the aggregate commit together. The pair of
+  stream and version gives optimistic concurrency. `ReadAll` walks the log
+  behind a transaction watermark, so a projection never skips an event that a
+  slow transaction committed late. `es.NewCheckpoints` saves a projection's
+  position in the same transaction as the read model write, so a failed handler
+  never advances the checkpoint.
 - **Inbox** -- `drel.NewInbox` suppresses a duplicate delivery. `Claim` writes
   the dedupe row in the same transaction as the application write, so the two
   commit together. The key is the pair of message ID and handler name.

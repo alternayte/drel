@@ -242,10 +242,33 @@ func (r *Runner) ensureTable(ctx context.Context) error {
 			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
-	if err != nil {
-		return fmt.Errorf("migrate: create tracking table: %w", err)
+	if err == nil {
+		return nil
 	}
-	return nil
+
+	// CREATE TABLE IF NOT EXISTS is not race-safe on Postgres. Two sessions can
+	// both pass the existence check, and the loser then fails on a catalog
+	// index. Up and Down create the table under the migration lock, so they
+	// never meet this. The read-only paths cannot take the lock, so they
+	// confirm the table is there and carry on.
+	if exists, checkErr := r.tableExists(ctx, "drel_migrations"); checkErr == nil && exists {
+		return nil
+	}
+	return fmt.Errorf("migrate: create tracking table: %w", err)
+}
+
+// tableExists reports whether a table is present. It is used to tell a lost
+// race to create a table from a real failure.
+func (r *Runner) tableExists(ctx context.Context, name string) (bool, error) {
+	query := "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+	if r.dialect == "postgres" {
+		query = "SELECT count(*) FROM information_schema.tables WHERE table_name = $1"
+	}
+	var n int
+	if err := r.drv.QueryRow(ctx, query, name).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func (r *Runner) appliedVersions(ctx context.Context) (map[string]string, error) {
@@ -266,18 +289,30 @@ func (r *Runner) appliedVersions(ctx context.Context) (map[string]string, error)
 	return applied, rows.Err()
 }
 
-// Up applies all pending migrations in version order. Each migration runs in
-// its own transaction. Returns the number of migrations applied.
+// Up applies every pending migration in order and returns how many it applied.
+//
+// Up takes the migration lock first, so several replicas that boot at one time
+// serialise: one applies the migrations and the others wait and then find
+// nothing to do.
+//
+// Do not call Up from two goroutines of one process that share one connection
+// pool. Each waiting call holds a pool connection while it waits for the lock,
+// so a pool smaller than the count of callers starves the winner. Separate
+// processes hold separate pools and are not affected.
 func (r *Runner) Up(ctx context.Context) (int, error) {
-	if err := r.ensureTable(ctx); err != nil {
-		return 0, err
-	}
-
+	// Take the lock before creating the tracking table. Several replicas that
+	// boot at one time would otherwise race on CREATE TABLE IF NOT EXISTS,
+	// which Postgres does not serialise, and the losing replica would fail to
+	// start.
 	unlock, err := r.lock(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer unlock()
+
+	if err := r.ensureTable(ctx); err != nil {
+		return 0, err
+	}
 
 	migrations, err := ParseMigrationDir(r.dir)
 	if err != nil {
@@ -337,15 +372,16 @@ func (r *Runner) Up(ctx context.Context) (int, error) {
 
 // Down rolls back the most recently applied migration.
 func (r *Runner) Down(ctx context.Context) error {
-	if err := r.ensureTable(ctx); err != nil {
-		return err
-	}
-
+	// Take the lock before creating the tracking table, as Up does.
 	unlock, err := r.lock(ctx)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+
+	if err := r.ensureTable(ctx); err != nil {
+		return err
+	}
 
 	migrations, err := ParseMigrationDir(r.dir)
 	if err != nil {
