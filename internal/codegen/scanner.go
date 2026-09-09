@@ -94,6 +94,13 @@ func scanPackage(pkg *packages.Package) ([]ModelInfo, error) {
 				mi.Name, mi.PKType)
 		}
 
+		keyCols, keyIsStruct, kErr := buildKeyColumns(pkInfo, tn.Name())
+		if kErr != nil {
+			return nil, kErr
+		}
+		mi.Key = keyCols
+		mi.KeyIsStruct = keyIsStruct
+
 		mi.TableName = inferTableName(tn.Name())
 		_, modelOpts, mErr := parseModelTag(pkInfo.Tag)
 		if mErr != nil {
@@ -138,10 +145,11 @@ func scanPackage(pkg *packages.Package) ([]ModelInfo, error) {
 }
 
 type pkTypeInfo struct {
-	Display string // short name for generated code (e.g., "int", "uuid.UUID")
-	Full    string // fully qualified (e.g., "github.com/google/uuid.UUID")
-	PkgPath string // import path (empty for primitives)
-	Tag     string // raw struct tag on the embedded drel.Model field
+	Display string     // short name for generated code (e.g., "int", "uuid.UUID")
+	Full    string     // fully qualified (e.g., "github.com/google/uuid.UUID")
+	PkgPath string     // import path (empty for primitives)
+	Type    types.Type // the key type argument itself
+	Tag     string     // raw struct tag on the embedded drel.Model field
 }
 
 func findModelEmbed(st *types.Struct) (info pkTypeInfo, found bool) {
@@ -178,9 +186,81 @@ func findModelEmbed(st *types.Struct) (info pkTypeInfo, found bool) {
 				}
 			}
 		}
-		return pkTypeInfo{Display: display, Full: full, PkgPath: pkgPath, Tag: st.Tag(i)}, true
+		return pkTypeInfo{Display: display, Full: full, PkgPath: pkgPath, Type: t, Tag: st.Tag(i)}, true
 	}
 	return pkTypeInfo{}, false
+}
+
+// buildKeyColumns resolves a model's primary key columns from the type argument
+// of its embedded drel.Model. A scalar type argument yields one column, named by
+// the first position of the embedded field's db tag and defaulting to "id". A
+// struct type argument yields one column per exported field, named by that
+// field's own db tag and defaulting to the snake-case field name.
+func buildKeyColumns(pk pkTypeInfo, modelName string) ([]KeyColumn, bool, error) {
+	kst, isStruct := pk.Type.Underlying().(*types.Struct)
+	if !isStruct {
+		name := "id"
+		col, _, err := parseModelTag(pk.Tag)
+		if err != nil {
+			return nil, false, fmt.Errorf("codegen: model %s: primary key tag: %w", modelName, err)
+		}
+		if col != "" {
+			name = col
+		}
+		return []KeyColumn{{ColumnName: name, GoType: pk.Display}}, false, nil
+	}
+
+	var cols []KeyColumn
+	for i := 0; i < kst.NumFields(); i++ {
+		f := kst.Field(i)
+		if !f.Exported() {
+			return nil, false, fmt.Errorf(
+				"codegen: model %s: composite key type %s has unexported field %q; generated code cannot read it, export the field",
+				modelName, pk.Display, f.Name())
+		}
+		if !isSupportedKeyFieldType(f.Type()) {
+			return nil, false, fmt.Errorf(
+				"codegen: model %s: composite key type %s field %q has unsupported type %s; key fields must be a signed integer, string, or uuid.UUID",
+				modelName, pk.Display, f.Name(), f.Type().String())
+		}
+		col, _, err := parseDBTag(kst.Tag(i))
+		if err != nil {
+			return nil, false, fmt.Errorf("codegen: model %s: key field %s: %w", modelName, f.Name(), err)
+		}
+		if col == "" {
+			col = toSnakeCase(f.Name())
+		}
+		cols = append(cols, KeyColumn{
+			FieldName:  f.Name(),
+			ColumnName: col,
+			GoType:     localTypeName(f.Type()),
+		})
+	}
+	if len(cols) == 0 {
+		return nil, false, fmt.Errorf("codegen: model %s: composite key type %s has no fields", modelName, pk.Display)
+	}
+	return cols, true, nil
+}
+
+// isSupportedKeyFieldType reports whether a composite key field's type can be a
+// primary key column: a signed integer, a string, or uuid.UUID (including named
+// types over those).
+func isSupportedKeyFieldType(t types.Type) bool {
+	if n, ok := t.(*types.Named); ok {
+		if o := n.Obj(); o != nil && o.Pkg() != nil &&
+			o.Pkg().Path() == "github.com/google/uuid" && o.Name() == "UUID" {
+			return true
+		}
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch b.Kind() {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.String:
+		return true
+	}
+	return false
 }
 
 func detectEmbeds(st *types.Struct) (softDelete, versioned, audit bool) {

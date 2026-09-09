@@ -19,16 +19,32 @@ type ModelInfo struct {
 	// Module is the feature slice this model belongs to. It is empty for a
 	// config that lists packages instead of modules.
 	Module string
+	// Key lists the primary key columns in key order. A scalar key type has
+	// exactly one entry whose FieldName is empty.
+	Key []KeyColumn
+	// KeyIsStruct reports whether the key type argument is a struct.
+	KeyIsStruct bool
+}
+
+// KeyColumn is one column of a model's primary key.
+type KeyColumn struct {
+	FieldName  string // exported Go field on the key struct; empty for a scalar key
+	ColumnName string // database column name
+	GoType     string // display Go type, e.g. "int" or "uuid.UUID"
 }
 
 // PKColumns returns the primary key column names in key order.
-//
-// TODO(task 5): this is a temporary shim that always returns the single
-// default column. It ignores any composite key shape scanned from the
-// model. Task 5 replaces this body with the real key shape.
 func (m ModelInfo) PKColumns() []string {
-	return []string{"id"}
+	out := make([]string, len(m.Key))
+	for i, k := range m.Key {
+		out[i] = k.ColumnName
+	}
+	return out
 }
+
+// IsCompositeKey reports whether the model's primary key spans more than one
+// column.
+func (m ModelInfo) IsCompositeKey() bool { return len(m.Key) > 1 }
 
 type FieldInfo struct {
 	Name       string

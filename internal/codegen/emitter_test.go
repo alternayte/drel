@@ -17,6 +17,7 @@ func TestEmitModelFile_SimpleModel(t *testing.T) {
 		PkgName:   "models",
 		PKType:    "int",
 		TableName: "products",
+		Key:       []KeyColumn{{ColumnName: "id", GoType: "int"}},
 		Fields: []FieldInfo{
 			{Name: "name", GoType: "string", ColumnName: "name", LocalGoType: "string"},
 			{Name: "price", GoType: "int", ColumnName: "price", LocalGoType: "int"},
