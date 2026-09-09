@@ -214,6 +214,19 @@ func buildKeyColumns(pk pkTypeInfo, modelName, ownerPkgPath string) ([]KeyColumn
 		}}, false, nil
 	}
 
+	// A struct key takes every column name from the key struct's own field
+	// tags, so a column name in the first position of the embedded field's db
+	// tag has nowhere to apply. Reject it rather than ignore it. The other
+	// options on that tag (table=, renamed_from=) describe the table, not the
+	// key, and stay valid; scanPackage parses them separately.
+	if pkCol, _, err := parseModelTag(pk.Tag); err != nil {
+		return nil, false, fmt.Errorf("codegen: model %s: primary key tag: %w", modelName, err)
+	} else if pkCol != "" {
+		return nil, false, fmt.Errorf(
+			"codegen: model %s: db tag %q on the embedded drel.Model names a key column, but composite key type %s takes its column names from its own field tags; remove %q and put a db tag on the %s field instead",
+			modelName, pkCol, pk.Display, pkCol, pk.Display)
+	}
+
 	var cols []KeyColumn
 	for i := 0; i < kst.NumFields(); i++ {
 		f := kst.Field(i)

@@ -964,3 +964,56 @@ type Account struct {
 	require.Len(t, models[0].Key, 1)
 	assert.Equal(t, "int", models[0].Key[0].UnderlyingGoType)
 }
+
+// A struct key takes its column names from the key struct's own field tags, so
+// a column name on the embedded drel.Model has nowhere to apply. Reject it
+// instead of ignoring it silently.
+func TestScan_StructKeyRejectsAColumnNameOnTheEmbeddedTag(t *testing.T) {
+	_, err := scanSourceErr(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type OrderLineKey struct {
+	OrderID int `+"`"+`db:"order_id"`+"`"+`
+	LineNo  int `+"`"+`db:"line_no"`+"`"+`
+}
+
+type OrderLine struct {
+	drel.Model[OrderLineKey] `+"`"+`db:"code"`+"`"+`
+	Qty int
+}
+`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OrderLine")
+	assert.Contains(t, err.Error(), `"code"`)
+	assert.Contains(t, err.Error(), "takes its column names from its own field tags")
+}
+
+// table= on the embedded tag describes the table, not the key, so it stays
+// valid alongside a struct key.
+func TestScan_StructKeyStillHonoursTableOnTheEmbeddedTag(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type OrderLineKey struct {
+	OrderID int `+"`"+`db:"order_id"`+"`"+`
+	LineNo  int `+"`"+`db:"line_no"`+"`"+`
+}
+
+type OrderLine struct {
+	drel.Model[OrderLineKey] `+"`"+`db:"table=ol"`+"`"+`
+	Qty int
+}
+`)
+	var ol ModelInfo
+	for _, m := range models {
+		if m.Name == "OrderLine" {
+			ol = m
+		}
+	}
+	assert.Equal(t, "ol", ol.TableName)
+	assert.Equal(t, []string{"order_id", "line_no"}, ol.PKColumns())
+}

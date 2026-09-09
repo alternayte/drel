@@ -181,7 +181,13 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 			case "int", "int8", "int16", "int32", "int64":
 				pk.Type = "INTEGER PRIMARY KEY AUTOINCREMENT"
 			default:
-				pk.Type = GoTypeToSQL(m.PKType, dialect) + " PRIMARY KEY"
+				// Named types (type AccountID int) land here deliberately. The
+				// emitter's isAppAssignedPK treats any non-builtin PK type as
+				// application-assigned and writes the key in the INSERT, so the
+				// column must not auto-increment. Resolve its SQL type from the
+				// key column's underlying kind, not from the local type name,
+				// which GoTypeToSQL does not recognize and maps to text.
+				pk.Type = keyColumnBaseSQLType(kc, dialect) + " PRIMARY KEY"
 			}
 		default:
 			switch m.PKType {
@@ -190,7 +196,9 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 			case "int64":
 				pk.Type = "BIGSERIAL PRIMARY KEY"
 			default:
-				pk.Type = GoTypeToSQL(m.PKType, dialect) + " PRIMARY KEY"
+				// See the sqlite branch: a named type is app-assigned, so it
+				// gets a plain column of its underlying kind, never SERIAL.
+				pk.Type = keyColumnBaseSQLType(kc, dialect) + " PRIMARY KEY"
 			}
 		}
 		t.Columns = append(t.Columns, pk)

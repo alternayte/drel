@@ -798,3 +798,32 @@ func TestGenerateCreateTable_SingleFieldStructKeyIntSQLite(t *testing.T) {
 	assert.Contains(t, sql, `"account_id" INTEGER PRIMARY KEY`)
 	assert.NotContains(t, sql, "AUTOINCREMENT")
 }
+
+// A named scalar key type (type AccountID int) must take its SQL type from the
+// key column's underlying kind, not from the local type name, which
+// GoTypeToSQL does not recognize and would map to text. It is
+// application-assigned (isAppAssignedPK is true for any non-builtin name), so
+// it must never auto-increment.
+func TestGenerateCreateTable_NamedScalarIntPK(t *testing.T) {
+	m := ModelInfo{Name: "Account", PKType: "AccountID", TableName: "accounts",
+		Key:    []KeyColumn{{ColumnName: "id", GoType: "AccountID", UnderlyingGoType: "int"}},
+		Fields: []FieldInfo{{Name: "name", GoType: "string", ColumnName: "name"}}}
+
+	pg := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, pg, `"id" integer PRIMARY KEY`)
+	assert.NotContains(t, pg, "SERIAL")
+	assert.NotContains(t, pg, `"id" text`)
+
+	lite := GenerateCreateTable(m, nil, "sqlite")
+	assert.Contains(t, lite, `"id" INTEGER PRIMARY KEY`)
+	assert.NotContains(t, lite, "AUTOINCREMENT")
+	assert.NotContains(t, lite, `"id" TEXT`)
+}
+
+// A named scalar key type over string keeps a text column.
+func TestGenerateCreateTable_NamedScalarStringPK(t *testing.T) {
+	m := ModelInfo{Name: "Country", PKType: "CountryCode", TableName: "countries",
+		Key:    []KeyColumn{{ColumnName: "code", GoType: "CountryCode", UnderlyingGoType: "string"}},
+		Fields: []FieldInfo{{Name: "name", GoType: "string", ColumnName: "name"}}}
+	assert.Contains(t, GenerateCreateTable(m, nil, "postgres"), `"code" text PRIMARY KEY`)
+}
