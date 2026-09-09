@@ -790,3 +790,49 @@ func TestEmitTypedRepos_NoUoWRepository(t *testing.T) {
 	assert.Contains(t, out, "type TxUserRepository struct {")
 	assert.NotContains(t, out, "UoW")
 }
+
+func TestEmit_CompositeKeyEmitsPKColumnsAndKeyValues(t *testing.T) {
+	m := ModelInfo{
+		Name:      "OrderLine",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	src := EmitModelFile(m)
+	assert.Contains(t, src, `PKColumns: []string{"order_id", "line_no"},`)
+	assert.Contains(t, src, "func orderlineKeyValues(key any) []any {")
+	assert.Contains(t, src, "k := key.(OrderLineKey)")
+	assert.Contains(t, src, "return []any{k.OrderID, k.LineNo}")
+	assert.Contains(t, src, "KeyValues:     orderlineKeyValues,")
+	assert.Contains(t, src, "KeyStrategy: drel.KeyAppAssigned,")
+	assert.NotContains(t, src, "GenerateKey:")
+	assert.Contains(t, src, "func orderlineKeyIsZero(p *OrderLine) bool {")
+	assert.Contains(t, src, "var zero OrderLineKey")
+	// Per-column normalization.
+	assert.Contains(t, src, "func orderlineNormalizeKey(v any) any {")
+	assert.Contains(t, src, "vals, ok := v.([]any)")
+	assert.Contains(t, src, "if len(vals) != 2 {")
+	assert.Contains(t, src, "drel.NormalizeIntKey(vals[0]).(int)")
+	assert.Contains(t, src, "drel.NormalizeIntKey(vals[1]).(int)")
+}
+
+func TestEmit_ScalarKeyEmitsANilKeyValues(t *testing.T) {
+	m := ModelInfo{
+		Name:      "User",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "users",
+		PKType:    "int",
+		Key:       []KeyColumn{{ColumnName: "id", GoType: "int"}},
+	}
+	src := EmitModelFile(m)
+	assert.Contains(t, src, `PKColumns: []string{"id"},`)
+	assert.NotContains(t, src, "KeyValues:")
+	assert.NotContains(t, src, "vals, ok := v.([]any)")
+}

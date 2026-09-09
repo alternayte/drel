@@ -332,6 +332,9 @@ func EmitModelFile(m ModelInfo) string {
 	// --- PK value ---
 	b.WriteString(fmt.Sprintf("func %sPKValue(p *%s) any {\n\treturn p.ID()\n}\n\n", lower, m.Name))
 
+	// --- Key splitter (struct keys only) ---
+	emitKeyValues(&b, m, lower)
+
 	// --- Column value ---
 	emitColumnValue(&b, m, lower, allCols, aliases)
 
@@ -344,8 +347,8 @@ func EmitModelFile(m ModelInfo) string {
 	// --- Key normalizer (matches pivot keys to the canonical PK type) ---
 	emitNormalizeKey(&b, m, lower)
 
-	// --- Key funcs (app-assigned PKs only) ---
-	if isAppAssignedPK(m.PKType) {
+	// --- Key funcs (app-assigned PKs only; a struct key is always app-assigned) ---
+	if m.KeyIsStruct || isAppAssignedPK(m.PKType) {
 		emitKeyFuncs(&b, m, lower)
 	}
 
@@ -714,19 +717,68 @@ func isAppAssignedPK(pkType string) bool {
 	}
 }
 
-func emitNormalizeKey(b *strings.Builder, m ModelInfo, lower string) {
-	b.WriteString(fmt.Sprintf("func %sNormalizeKey(v any) any {\n", lower))
-	switch {
-	case m.PKType == "uuid.UUID":
-		b.WriteString("\treturn drel.NormalizeUUIDKey(v)\n")
-	case isAppAssignedPK(m.PKType):
-		// string or other app-assigned key: identity.
-		b.WriteString("\treturn v\n")
-	default:
-		// integer auto-increment PK.
-		b.WriteString("\treturn drel.NormalizeIntKey(v)\n")
+// emitKeyValues emits the splitter that turns a struct key into one value per
+// key column, in key order. A scalar key needs no splitter: a nil KeyValues is
+// the single-column default.
+func emitKeyValues(b *strings.Builder, m ModelInfo, lower string) {
+	if !m.KeyIsStruct {
+		return
 	}
+	b.WriteString(fmt.Sprintf("// %sKeyValues splits a %s into one value per key column, in key order.\n", lower, m.PKType))
+	b.WriteString(fmt.Sprintf("func %sKeyValues(key any) []any {\n", lower))
+	b.WriteString(fmt.Sprintf("\tk := key.(%s)\n", m.PKType))
+	parts := make([]string, len(m.Key))
+	for i, kc := range m.Key {
+		parts[i] = "k." + kc.FieldName
+	}
+	b.WriteString(fmt.Sprintf("\treturn []any{%s}\n}\n\n", strings.Join(parts, ", ")))
+}
+
+// normalizeKeyExpr returns the expression that converts one raw driver value
+// into the canonical Go type goType. It is the single source of the per-type
+// conversion rule, shared by the scalar and the struct key normalizers.
+func normalizeKeyExpr(goType, valExpr string) string {
+	switch {
+	case goType == "uuid.UUID":
+		return fmt.Sprintf("drel.NormalizeUUIDKey(%s)", valExpr)
+	case isAppAssignedPK(goType):
+		// string or other app-assigned key: identity.
+		return valExpr
+	default:
+		// integer key column.
+		return fmt.Sprintf("drel.NormalizeIntKey(%s)", valExpr)
+	}
+}
+
+func emitNormalizeKey(b *strings.Builder, m ModelInfo, lower string) {
+	if m.KeyIsStruct {
+		emitStructNormalizeKey(b, m, lower)
+		return
+	}
+	b.WriteString(fmt.Sprintf("func %sNormalizeKey(v any) any {\n", lower))
+	b.WriteString(fmt.Sprintf("\treturn %s\n", normalizeKeyExpr(m.PKType, "v")))
 	b.WriteString("}\n\n")
+}
+
+// emitStructNormalizeKey emits a normalizer that rebuilds a struct key from a
+// []any of per-column driver values. Each column is converted with the same
+// rule the scalar normalizer uses for that column's Go type. Any input of an
+// unexpected shape, or a column that does not convert, is returned unchanged.
+func emitStructNormalizeKey(b *strings.Builder, m ModelInfo, lower string) {
+	b.WriteString(fmt.Sprintf("// %sNormalizeKey converts per-column driver values into a canonical %s,\n", lower, m.PKType))
+	b.WriteString("// so a key read back from the driver compares equal to PKValue.\n")
+	b.WriteString(fmt.Sprintf("func %sNormalizeKey(v any) any {\n", lower))
+	b.WriteString("\tvals, ok := v.([]any)\n")
+	b.WriteString("\tif !ok {\n\t\treturn v\n\t}\n")
+	b.WriteString(fmt.Sprintf("\tif len(vals) != %d {\n\t\treturn v\n\t}\n", len(m.Key)))
+	b.WriteString(fmt.Sprintf("\tvar k %s\n", m.PKType))
+	for i, kc := range m.Key {
+		expr := normalizeKeyExpr(kc.GoType, fmt.Sprintf("vals[%d]", i))
+		b.WriteString(fmt.Sprintf("\tf%d, ok := %s.(%s)\n", i, expr, kc.GoType))
+		b.WriteString("\tif !ok {\n\t\treturn v\n\t}\n")
+		b.WriteString(fmt.Sprintf("\tk.%s = f%d\n", kc.FieldName, i))
+	}
+	b.WriteString("\treturn k\n}\n\n")
 }
 
 func emitKeyFuncs(b *strings.Builder, m ModelInfo, lower string) {
@@ -781,12 +833,16 @@ func emitMeta(b *strings.Builder, m ModelInfo, lower, varPlural string, allCols 
 	b.WriteString(fmt.Sprintf("\tSnapshot:      snapshot%s,\n", exportName(lower)))
 	b.WriteString(fmt.Sprintf("\tDiff:          diff%s,\n", exportName(lower)))
 	b.WriteString(fmt.Sprintf("\tPKValue:       %sPKValue,\n", lower))
+	if m.KeyIsStruct {
+		b.WriteString(fmt.Sprintf("\tKeyValues:     %sKeyValues,\n", lower))
+	}
 	b.WriteString(fmt.Sprintf("\tInsertColumns: %sInsertColumns,\n", lower))
 	b.WriteString(fmt.Sprintf("\tScanReturning: %sScanReturning,\n", lower))
 	b.WriteString(fmt.Sprintf("\tColumnValue:   %sColumnValue,\n", lower))
 	b.WriteString(fmt.Sprintf("\tNormalizeKey:  %sNormalizeKey,\n", lower))
 
-	if isAppAssignedPK(m.PKType) {
+	// A struct key is always application-assigned.
+	if m.KeyIsStruct || isAppAssignedPK(m.PKType) {
 		pkType := m.PKType
 		b.WriteString("\tKeyStrategy: drel.KeyAppAssigned,\n")
 		if m.PKType == "uuid.UUID" {
