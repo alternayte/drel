@@ -41,11 +41,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
+	err = database.WithTx(ctx, func(ctx context.Context) error {
 		o := orders.NewOrder("Alice", 4200)
-		drel.Repo(tx, orders.OrderMeta).Add(o)
+		database.Tx(ctx).Orders.Add(o)
 		fmt.Printf("id available immediately after Add: %s (v7)\n", o.ID())
-		return tx.SaveChanges(ctx)
+		// SaveChanges flushes early, so the id is in the database before the
+		// commit. WithTx flushes on its own when the function returns.
+		return drel.MustFromContext(ctx).SaveChanges(ctx)
 	})
 	if err != nil {
 		log.Fatal(err)

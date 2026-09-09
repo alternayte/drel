@@ -99,11 +99,11 @@ func main() {
 	}
 
 	fmt.Println("=== Insert (watch the query log + spans) ===")
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, catalog.ProductMeta)
-		repo.Add(catalog.NewProduct("Keyboard", 7999))
-		repo.Add(catalog.NewProduct("Mouse", 2999))
-		return tx.SaveChanges(ctx)
+	err = database.WithTx(ctx, func(ctx context.Context) error {
+		products := database.Tx(ctx).Products
+		products.Add(catalog.NewProduct("Keyboard", 7999))
+		products.Add(catalog.NewProduct("Mouse", 2999))
+		return nil
 	})
 	if err != nil {
 		log.Fatal(err)

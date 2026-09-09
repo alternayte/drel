@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/alternayte/drel"
 	"github.com/alternayte/drel/examples/sqlite-todo/db"
 	"github.com/alternayte/drel/examples/sqlite-todo/models"
 )
@@ -54,9 +53,9 @@ func main() {
 	}
 
 	// === Unique index enforcement ===
-	err = database.Transaction(ctx, func(tx *drel.Tx) error {
-		drel.NewTxRepository(tx, models.NoteMeta).Add(models.NewNote("note-01", "dup", "work"))
-		return tx.SaveChanges(ctx)
+	err = database.WithTx(ctx, func(ctx context.Context) error {
+		database.Tx(ctx).Notes.Add(models.NewNote("note-01", "dup", "work"))
+		return nil
 	})
 	fmt.Printf("=== Duplicate slug rejected by unique index: %v\n", err != nil)
 

@@ -205,6 +205,9 @@ See [examples/](examples/) for working samples:
 - [api](examples/api/) -- dynamic query composition from HTTP parameters (IQueryable-style conditional `Where` chaining)
 - [multi-model](examples/multi-model/) -- domain events, transaction hooks
 - [outbox](examples/outbox/) -- transactional outbox: events persisted atomically with data, plus the lease-based relay
+- [inbox](examples/inbox/) -- duplicate delivery suppressed: `Claim` in the handler's transaction, `Fail`, and `Purge`
+- [event-sourcing](examples/event-sourcing/) -- event store, optimistic concurrency, a projection with checkpoints, and a replay
+- [feature-slices](examples/feature-slices/) -- one module for each slice: per-slice migrations, `ApplyMigrationsFS`, and `db.Modules.<Slice>`
 - [observability](examples/observability/) -- structured query logging, tracing spans, and dev-mode diagnostics
 - [uuid-keys](examples/uuid-keys/) -- application-assigned UUIDv7 primary keys
 - [internals](examples/internals/) -- what codegen produces, hand-written, to see the machinery

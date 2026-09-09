@@ -207,9 +207,8 @@ func handleCreateProduct(database *db.DB) http.HandlerFunc {
 			InStock:  req.InStock,
 		}
 
-		err := database.Transaction(ctx, func(tx *drel.Tx) error {
-			repo := drel.NewTxRepository(tx, products.ProductMeta)
-			repo.Add(product)
+		err := database.WithTx(ctx, func(ctx context.Context) error {
+			database.Tx(ctx).Products.Add(product)
 			return nil
 		})
 		if err != nil {
@@ -235,8 +234,8 @@ func handleDeleteProduct(database *db.DB) http.HandlerFunc {
 			return
 		}
 
-		err = database.Transaction(ctx, func(tx *drel.Tx) error {
-			repo := drel.NewTxRepository(tx, products.ProductMeta)
+		err = database.WithTx(ctx, func(ctx context.Context) error {
+			repo := database.Tx(ctx).Products
 			product, err := repo.Find(ctx, id)
 			if err != nil {
 				return err
@@ -272,8 +271,8 @@ func setup(ctx context.Context, database *db.DB) {
 }
 
 func seed(ctx context.Context, database *db.DB) {
-	err := database.Transaction(ctx, func(tx *drel.Tx) error {
-		repo := drel.NewTxRepository(tx, products.ProductMeta)
+	err := database.WithTx(ctx, func(ctx context.Context) error {
+		repo := database.Tx(ctx).Products
 
 		repo.Add(&products.Product{Name: "Laptop", Price: 99999, Category: "electronics", InStock: true})
 		repo.Add(&products.Product{Name: "Mechanical Keyboard", Price: 14999, Category: "electronics", InStock: true})
