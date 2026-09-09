@@ -3,6 +3,7 @@ package drel
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"strings"
 	"sync"
@@ -447,6 +448,26 @@ func (e *Engine) DialectName() string {
 // (see Engine.DialectName); this is the caller's responsibility.
 func (e *Engine) ApplyMigrations(ctx context.Context, dir string) (int, error) {
 	return migrate.NewRunner(e.drv, dir, e.DialectName()).Up(ctx)
+}
+
+// ApplyMigrationsFS applies the pending migrations of one or more embedded
+// migration sets and returns how many it applied. Each feature slice embeds its
+// own migrations with //go:embed, and drel merges the sets in version order, so
+// the migrations run in the order they were written and not in the order the
+// arguments appear.
+//
+//	//go:embed *.sql
+//	var FS embed.FS            // generated in each module
+//
+//	n, err := db.ApplyMigrationsFS(ctx, posts.FS, users.FS, billing.FS)
+//
+// A version that appears in two modules is an error that names both files. Two
+// slices generated in the same second, or on two branches, produce the same
+// version, and there is no correct order between them.
+//
+// The migration files must be written for the engine's dialect.
+func (e *Engine) ApplyMigrationsFS(ctx context.Context, fsys ...fs.FS) (int, error) {
+	return migrate.NewRunnerFS(e.drv, e.DialectName(), fsys...).Up(ctx)
 }
 
 // includeDialect exposes the dialect for the include reader interface.

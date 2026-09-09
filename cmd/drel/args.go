@@ -17,6 +17,7 @@ type parsedCmd struct {
 	ConfigPath string   // resolved value of --config / -c (default "drel.yaml")
 	AuthToken  string   // --auth-token (migrate subcommands only; falls back to TURSO_AUTH_TOKEN env)
 	Watch      bool     // --watch / -w (generate only): run in watch mode
+	Module     string   // --module: limit the work to one module of the config
 	Positional []string // remaining non-flag args (e.g. the migration name)
 }
 
@@ -67,16 +68,18 @@ func parseArgs(argv []string) (parsedCmd, error) {
 		var cfg string
 		var tok string
 		var watch bool
+		var module string
 		fs := commandFlags(cmd, false, &cfg, &tok)
 		fs.BoolVar(&watch, "watch", false, "watch for source changes and regenerate")
 		fs.BoolVar(&watch, "w", false, "watch for source changes and regenerate (shorthand)")
+		fs.StringVar(&module, "module", "", "generate one module of the config only")
 		if err := fs.Parse(argv[1:]); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				return parsedCmd{Command: "help"}, nil
 			}
 			return parsedCmd{}, fmt.Errorf("%s: %w", cmd, err)
 		}
-		return parsedCmd{Command: cmd, ConfigPath: cfg, Watch: watch, Positional: fs.Args()}, nil
+		return parsedCmd{Command: cmd, ConfigPath: cfg, Watch: watch, Module: module, Positional: fs.Args()}, nil
 
 	case "migrate":
 		if len(argv) < 2 {
@@ -92,7 +95,9 @@ func parseArgs(argv []string) (parsedCmd, error) {
 		}
 		var cfg string
 		var tok string
+		var module string
 		fs := commandFlags("migrate "+sub, true, &cfg, &tok)
+		fs.StringVar(&module, "module", "", "act on one module of the config only")
 		if err := fs.Parse(argv[2:]); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				return parsedCmd{Command: "help"}, nil
@@ -102,7 +107,7 @@ func parseArgs(argv []string) (parsedCmd, error) {
 			}
 			return parsedCmd{}, fmt.Errorf("migrate %s: %w", sub, err)
 		}
-		pc := parsedCmd{Command: "migrate", Subcommand: sub, ConfigPath: cfg, AuthToken: tok, Positional: fs.Args()}
+		pc := parsedCmd{Command: "migrate", Subcommand: sub, ConfigPath: cfg, AuthToken: tok, Module: module, Positional: fs.Args()}
 		if sub == "new" {
 			if err := validateMigrationName(pc.Positional); err != nil {
 				return parsedCmd{}, err

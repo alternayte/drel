@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alternayte/drel/internal/codegen"
 	"github.com/alternayte/drel/internal/driver"
@@ -69,18 +71,100 @@ func printMigrateUsage() {
 	fmt.Fprintln(os.Stderr, "  --auth-token <tok>   LibSQL/Turso auth token (or TURSO_AUTH_TOKEN env)")
 }
 
-func resolveMigrationsDir(configPath string) string {
+// resolveModuleDirs returns the absolute migration directory of each module,
+// or of the one module that name selects.
+func resolveModuleDirs(configPath, module string) []string {
 	cfg, err := codegen.LoadConfig(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "drel migrate: %v\n", err)
 		os.Exit(1)
 	}
-	dir := cfg.Output.Migrations
+
+	mods := cfg.ModuleList()
+	if module != "" {
+		one, err := cfg.Module(module)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "drel migrate: %v\n", err)
+			os.Exit(1)
+		}
+		mods = []codegen.ModuleConfig{one}
+	}
+
+	cfgDir, _ := filepath.Abs(filepath.Dir(configPath))
+	dirs := make([]string, 0, len(mods))
+	for _, m := range mods {
+		dir := m.Migrations
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(cfgDir, dir)
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs
+}
+
+// migrationFS returns one filesystem for each migration directory that exists.
+// A module that has no migration directory yet contributes nothing.
+func migrationFS(dirs []string) []fs.FS {
+	var out []fs.FS
+	for _, d := range dirs {
+		if _, err := os.Stat(d); err != nil {
+			continue
+		}
+		out = append(out, os.DirFS(d))
+	}
+	return out
+}
+
+// newMigrateRunner builds a runner over every migration directory of the
+// selected modules. The sets merge in version order, so the migrations of two
+// slices run in the order they were written.
+func newMigrateRunner(drv driver.Driver, parsed parsedCmd, dsn string) *migrate.Runner {
+	dirs := resolveModuleDirs(parsed.ConfigPath, parsed.Module)
+	dialect := runnerDialect(parsed.ConfigPath, dsn)
+	if len(dirs) == 1 {
+		return migrate.NewRunner(drv, dirs[0], dialect)
+	}
+	return migrate.NewRunnerFS(drv, dialect, migrationFS(dirs)...)
+}
+
+// resolveNewMigrationDir returns the single directory that `migrate new` writes
+// into. A config with more than one module must name the module, because the
+// migration belongs to exactly one slice.
+func resolveNewMigrationDir(configPath, module string) (codegen.ModuleConfig, string) {
+	cfg, err := codegen.LoadConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate new: %v\n", err)
+		os.Exit(1)
+	}
+
+	mods := cfg.ModuleList()
+	var target codegen.ModuleConfig
+	switch {
+	case module != "":
+		target, err = cfg.Module(module)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "drel migrate new: %v\n", err)
+			os.Exit(1)
+		}
+	case len(mods) == 1:
+		target = mods[0]
+	default:
+		names := make([]string, len(mods))
+		for i, m := range mods {
+			names[i] = m.Name
+		}
+		fmt.Fprintf(os.Stderr,
+			"drel migrate new: the config declares %d modules; name the one this migration belongs to with --module (declared: %s)\n",
+			len(mods), strings.Join(names, ", "))
+		os.Exit(1)
+	}
+
+	dir := target.Migrations
 	if !filepath.IsAbs(dir) {
 		cfgDir, _ := filepath.Abs(filepath.Dir(configPath))
 		dir = filepath.Join(cfgDir, dir)
 	}
-	return dir
+	return target, dir
 }
 
 func requireDSN() string {
@@ -113,7 +197,6 @@ func runMigrateNew(parsed parsedCmd) {
 	}
 	name := parsed.Positional[0]
 	cp := parsed.ConfigPath
-	mDir := resolveMigrationsDir(cp)
 
 	cfg, err := codegen.LoadConfig(cp)
 	if err != nil {
@@ -121,16 +204,24 @@ func runMigrateNew(parsed parsedCmd) {
 		os.Exit(1)
 	}
 
+	// The migration belongs to exactly one module, and it diffs that module's
+	// own snapshot. A slice therefore owns its migrations.
+	target, mDir := resolveNewMigrationDir(cp, parsed.Module)
+
 	cfgDir, _ := filepath.Abs(filepath.Dir(cp))
-	models, err := codegen.ScanPackages(cfg.Packages, cfgDir)
+	models, err := codegen.ScanPackages(target.Packages, cfgDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "drel migrate new: %v\n", err)
 		os.Exit(1)
 	}
 	if len(models) == 0 {
-		fmt.Fprintln(os.Stderr, "drel migrate new: no models found")
+		fmt.Fprintf(os.Stderr, "drel migrate new: no models found in module %q\n", target.Name)
 		os.Exit(1)
 	}
+
+	// A model may reference a table of another module. The merged apply order
+	// is by timestamp, so warn that the order matters.
+	warnCrossModuleRefs(cfg, target, models, cfgDir)
 
 	dialect := cfg.Dialect
 
@@ -190,12 +281,66 @@ func runMigrateNew(parsed parsedCmd) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("drel: created migration %s_%s\n", version, name)
+	// Refresh the embed file so the new migration reaches the host through
+	// Engine.ApplyMigrationsFS.
+	if _, err := codegen.WriteMigrationsEmbed(mDir, target.Name); err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate new: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("drel: created migration %s_%s in module %s\n", version, name, target.Name)
+}
+
+// warnCrossModuleRefs reports a relation that points at a table owned by
+// another module. The reference is allowed, and the merged migrations apply in
+// timestamp order, so a person must know that the order matters.
+func warnCrossModuleRefs(cfg *codegen.Config, target codegen.ModuleConfig, models []codegen.ModelInfo, cfgDir string) {
+	others := make(map[string]string) // model name -> module name
+	for _, m := range cfg.ModuleList() {
+		if m.Name == target.Name {
+			continue
+		}
+		otherModels, err := codegen.ScanPackages(m.Packages, cfgDir)
+		if err != nil {
+			continue // a module that does not build cannot be checked here
+		}
+		for _, om := range otherModels {
+			others[om.Name] = m.Name
+		}
+	}
+	if len(others) == 0 {
+		return
+	}
+
+	own := make(map[string]bool)
+	for _, m := range models {
+		own[m.Name] = true
+	}
+
+	seen := make(map[string]bool)
+	for _, m := range models {
+		for _, f := range m.Fields {
+			if f.Relation == nil || f.Relation.TargetModel == "" {
+				continue
+			}
+			ownerModule, ok := others[f.Relation.TargetModel]
+			if !ok || own[f.Relation.TargetModel] {
+				continue
+			}
+			key := f.Relation.TargetModel + "/" + ownerModule
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			fmt.Fprintf(os.Stderr,
+				"drel: warning: module %q references model %q owned by module %q; the merged migrations apply in timestamp order, so generate %q first\n",
+				target.Name, f.Relation.TargetModel, ownerModule, ownerModule)
+		}
+	}
 }
 
 func runMigrateUp(parsed parsedCmd) {
 	dsn := requireDSN()
-	mDir := resolveMigrationsDir(parsed.ConfigPath)
 	ctx, stop := signalContext()
 	defer stop()
 
@@ -206,7 +351,7 @@ func runMigrateUp(parsed parsedCmd) {
 	}
 	defer drv.Close()
 
-	runner := migrate.NewRunner(drv, mDir, runnerDialect(parsed.ConfigPath, dsn))
+	runner := newMigrateRunner(drv, parsed, dsn)
 	count, err := runner.Up(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "drel migrate up: %v\n", err)
@@ -221,7 +366,6 @@ func runMigrateUp(parsed parsedCmd) {
 
 func runMigrateDown(parsed parsedCmd) {
 	dsn := requireDSN()
-	mDir := resolveMigrationsDir(parsed.ConfigPath)
 	ctx, stop := signalContext()
 	defer stop()
 
@@ -232,7 +376,7 @@ func runMigrateDown(parsed parsedCmd) {
 	}
 	defer drv.Close()
 
-	runner := migrate.NewRunner(drv, mDir, runnerDialect(parsed.ConfigPath, dsn))
+	runner := newMigrateRunner(drv, parsed, dsn)
 	if err := runner.Down(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "drel migrate down: %v\n", err)
 		os.Exit(1)
@@ -242,7 +386,6 @@ func runMigrateDown(parsed parsedCmd) {
 
 func runMigrateStatus(parsed parsedCmd) {
 	dsn := requireDSN()
-	mDir := resolveMigrationsDir(parsed.ConfigPath)
 	ctx, stop := signalContext()
 	defer stop()
 
@@ -253,7 +396,7 @@ func runMigrateStatus(parsed parsedCmd) {
 	}
 	defer drv.Close()
 
-	runner := migrate.NewRunner(drv, mDir, runnerDialect(parsed.ConfigPath, dsn))
+	runner := newMigrateRunner(drv, parsed, dsn)
 	statuses, err := runner.Status(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "drel migrate status: %v\n", err)
@@ -284,7 +427,6 @@ func runMigrateStatus(parsed parsedCmd) {
 
 func runMigrateLint(parsed parsedCmd) {
 	dsn := requireDSN()
-	mDir := resolveMigrationsDir(parsed.ConfigPath)
 	ctx, stop := signalContext()
 	defer stop()
 
@@ -295,7 +437,7 @@ func runMigrateLint(parsed parsedCmd) {
 	}
 	defer drv.Close()
 
-	runner := migrate.NewRunner(drv, mDir, runnerDialect(parsed.ConfigPath, dsn))
+	runner := newMigrateRunner(drv, parsed, dsn)
 	issues, err := runner.Lint(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "drel migrate lint: %v\n", err)
@@ -313,7 +455,6 @@ func runMigrateLint(parsed parsedCmd) {
 
 func runMigrateCheck(parsed parsedCmd) {
 	dsn := requireDSN()
-	mDir := resolveMigrationsDir(parsed.ConfigPath)
 	ctx, stop := signalContext()
 	defer stop()
 
@@ -324,7 +465,7 @@ func runMigrateCheck(parsed parsedCmd) {
 	}
 	defer drv.Close()
 
-	runner := migrate.NewRunner(drv, mDir, runnerDialect(parsed.ConfigPath, dsn))
+	runner := newMigrateRunner(drv, parsed, dsn)
 	pending, err := runner.Pending(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "drel migrate check: %v\n", err)

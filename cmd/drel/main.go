@@ -49,7 +49,8 @@ func fprintUsage(w interface{ Write([]byte) (int, error) }) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  init        Scaffold a drel.yaml configuration file")
-	fmt.Fprintln(w, "  generate    Generate code from model definitions (--watch for inner loop)")
+	fmt.Fprintln(w, "  generate    Generate code from model definitions (--watch for inner loop,")
+	fmt.Fprintln(w, "              --module <name> for one feature slice)")
 	fmt.Fprintln(w, "  migrate     Manage database migrations")
 	fmt.Fprintln(w, "  seed        Run seed functions against the database")
 	fmt.Fprintln(w, "  version     Print version")
@@ -81,6 +82,23 @@ output:
   migrations: ./db/migrations   # SQL migration files
 
 dialect: postgres               # postgres | sqlite
+
+# A project of feature slices declares modules instead of packages. Each module
+# owns its models and its migrations, so deleting the directory removes the
+# feature. Generate one slice with ` + "`drel generate --module posts`" + `, and write
+# its migration with ` + "`drel migrate new --module posts <name>`" + `.
+#
+# modules:
+#   - name: users
+#     packages: [./internal/features/users]
+#     migrations: ./internal/features/users/migrations
+#   - name: posts
+#     packages: [./internal/features/posts]
+#
+# Each module gets a generated migrations_drel.go that embeds its SQL. Apply
+# them together:
+#
+#     n, err := db.ApplyMigrationsFS(ctx, users.FS, posts.FS)
 `
 
 // initGoGenerateHint returns the post-init instruction telling the user how to
@@ -166,7 +184,7 @@ func runGenerate(parsed parsedCmd) {
 		return
 	}
 
-	if err := codegen.Generate(parsed.ConfigPath); err != nil {
+	if err := codegen.GenerateModule(parsed.ConfigPath, parsed.Module); err != nil {
 		fmt.Fprintf(os.Stderr, "drel generate: %v\n", err)
 		os.Exit(1)
 	}

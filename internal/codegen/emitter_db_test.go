@@ -128,3 +128,67 @@ func TestEmitDBFile_ContextTransaction(t *testing.T) {
 	assert.NotContains(t, out, "UnitOfWork")
 	assert.NotContains(t, out, "UoW")
 }
+
+// TestEmitDBFile_ModuleSets covers the slice-scoped repository sets. A module
+// named "posts" that holds the model Post would give DB a field Posts and a
+// method Posts(), which Go rejects, so the sets live in a Modules holder.
+func TestEmitDBFile_ModuleSets(t *testing.T) {
+	models := []ModelInfo{
+		{
+			Name: "Post", PkgPath: "app/features/posts", PkgName: "posts", Module: "posts",
+			PKType: "int", TableName: "posts",
+			Fields: []FieldInfo{{Name: "title", GoType: "string", ColumnName: "title"}},
+		},
+		{
+			Name: "Comment", PkgPath: "app/features/posts", PkgName: "posts", Module: "posts",
+			PKType: "int", TableName: "comments",
+			Fields: []FieldInfo{{Name: "body", GoType: "string", ColumnName: "body"}},
+		},
+		{
+			Name: "User", PkgPath: "app/features/users", PkgName: "users", Module: "users",
+			PKType: "int", TableName: "users",
+			Fields: []FieldInfo{{Name: "name", GoType: "string", ColumnName: "name"}},
+		},
+	}
+
+	out := EmitDBFile(models, "db")
+
+	// The flat fields stay, so nothing that exists today breaks.
+	assert.Contains(t, out, "Posts *posts.PostRepository")
+	assert.Contains(t, out, "Users *users.UserRepository")
+
+	// The untracked sets.
+	assert.Contains(t, out, "type PostsRepos struct {")
+	assert.Contains(t, out, "type UsersRepos struct {")
+	assert.Contains(t, out, "type Modules struct {")
+	assert.Contains(t, out, "Posts PostsRepos")
+	assert.Contains(t, out, "Users UsersRepos")
+
+	// The tracked sets hang off TxRepos, so a slice reaches only its own
+	// repositories while the transaction stays shared.
+	assert.Contains(t, out, "type PostsTxRepos struct {")
+	assert.Contains(t, out, "type TxModules struct {")
+	assert.Contains(t, out, "Modules TxModules")
+
+	// A module holds every model of its packages.
+	assert.Contains(t, out, "Comments *posts.CommentRepository")
+	assert.Contains(t, out, "Comments *posts.TxCommentRepository")
+}
+
+// TestEmitDBFile_NoModulesEmitsNoHolder proves a project that lists packages
+// instead of modules gets no extra code.
+func TestEmitDBFile_NoModulesEmitsNoHolder(t *testing.T) {
+	models := []ModelInfo{
+		{
+			Name: "User", PkgPath: "app/models", PkgName: "models",
+			PKType: "int", TableName: "users",
+			Fields: []FieldInfo{{Name: "name", GoType: "string", ColumnName: "name"}},
+		},
+	}
+
+	out := EmitDBFile(models, "db")
+
+	assert.NotContains(t, out, "type Modules struct")
+	assert.NotContains(t, out, "type TxModules struct")
+	assert.Contains(t, out, "Users *models.UserRepository")
+}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,12 +32,26 @@ type Migration struct {
 //
 // If the directory does not exist, it returns nil with no error.
 func ParseMigrationDir(dir string) ([]Migration, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("migrate: read dir: %w", err)
+	}
+	migrations, err := ParseMigrationFS(os.DirFS(dir))
+	if err != nil {
+		return nil, err
+	}
+	return migrations, nil
+}
+
+// ParseMigrationFS reads migration files from the root of a filesystem and
+// returns them sorted by version. It is the entry point for a module that
+// embeds its own migrations with //go:embed.
+func ParseMigrationFS(fsys fs.FS) ([]Migration, error) {
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return nil, fmt.Errorf("migrate: read the migration filesystem: %w", err)
 	}
 
 	upFiles := map[string]string{}
@@ -47,20 +62,19 @@ func ParseMigrationDir(dir string) ([]Migration, error) {
 			continue
 		}
 		name := entry.Name()
-		if strings.HasSuffix(name, ".up.sql") {
-			key := strings.TrimSuffix(name, ".up.sql")
-			content, err := os.ReadFile(filepath.Join(dir, name))
+		switch {
+		case strings.HasSuffix(name, ".up.sql"):
+			content, err := fs.ReadFile(fsys, name)
 			if err != nil {
 				return nil, err
 			}
-			upFiles[key] = string(content)
-		} else if strings.HasSuffix(name, ".down.sql") {
-			key := strings.TrimSuffix(name, ".down.sql")
-			content, err := os.ReadFile(filepath.Join(dir, name))
+			upFiles[strings.TrimSuffix(name, ".up.sql")] = string(content)
+		case strings.HasSuffix(name, ".down.sql"):
+			content, err := fs.ReadFile(fsys, name)
 			if err != nil {
 				return nil, err
 			}
-			downFiles[key] = string(content)
+			downFiles[strings.TrimSuffix(name, ".down.sql")] = string(content)
 		}
 	}
 
@@ -87,6 +101,37 @@ func ParseMigrationDir(dir string) ([]Migration, error) {
 	}
 
 	return migrations, nil
+}
+
+// MergeMigrations reads every filesystem and returns one set sorted by version,
+// so the migrations of several modules run in the order they were written.
+//
+// A version that appears in two modules is an error. Two slices generated in
+// the same second, or on two branches, produce the same version, and there is
+// no correct order between them. A failed start is better than a wrong apply
+// order, so the error names both files.
+func MergeMigrations(fsys ...fs.FS) ([]Migration, error) {
+	seen := make(map[string]Migration)
+	var merged []Migration
+
+	for _, f := range fsys {
+		set, err := ParseMigrationFS(f)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range set {
+			if other, ok := seen[m.Version]; ok {
+				return nil, fmt.Errorf(
+					"migrate: migration version %s appears twice: %s_%s and %s_%s; regenerate one of them",
+					m.Version, other.Version, other.Name, m.Version, m.Name)
+			}
+			seen[m.Version] = m
+			merged = append(merged, m)
+		}
+	}
+
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Version < merged[j].Version })
+	return merged, nil
 }
 
 // WriteMigration creates a new migration file pair in the given directory.
@@ -143,6 +188,7 @@ func ChecksumContent(content string) string {
 type Runner struct {
 	drv     driver.Driver
 	dir     string
+	fsys    []fs.FS
 	dialect string
 }
 
@@ -151,6 +197,22 @@ type Runner struct {
 // selects the migration-lock strategy used by Up/Down.
 func NewRunner(drv driver.Driver, dir, dialect string) *Runner {
 	return &Runner{drv: drv, dir: dir, dialect: dialect}
+}
+
+// NewRunnerFS creates a Runner that reads its migrations from one or more
+// filesystems instead of a directory. A module embeds its own migrations with
+// //go:embed, and the sets merge in version order.
+func NewRunnerFS(drv driver.Driver, dialect string, fsys ...fs.FS) *Runner {
+	return &Runner{drv: drv, fsys: fsys, dialect: dialect}
+}
+
+// migrations returns the migration set of this runner, from its filesystems
+// when it has them and from its directory otherwise.
+func (r *Runner) migrations() ([]Migration, error) {
+	if r.fsys != nil {
+		return MergeMigrations(r.fsys...)
+	}
+	return ParseMigrationDir(r.dir)
 }
 
 // Dialect returns the dialect string the Runner was constructed with.
@@ -314,7 +376,7 @@ func (r *Runner) Up(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	migrations, err := ParseMigrationDir(r.dir)
+	migrations, err := r.migrations()
 	if err != nil {
 		return 0, err
 	}
@@ -383,7 +445,7 @@ func (r *Runner) Down(ctx context.Context) error {
 		return err
 	}
 
-	migrations, err := ParseMigrationDir(r.dir)
+	migrations, err := r.migrations()
 	if err != nil {
 		return err
 	}
@@ -483,7 +545,7 @@ func (r *Runner) Status(ctx context.Context) ([]MigrationStatus, error) {
 		return nil, err
 	}
 
-	migrations, err := ParseMigrationDir(r.dir)
+	migrations, err := r.migrations()
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +624,7 @@ func (r *Runner) Lint(ctx context.Context) ([]LintResult, error) {
 		return nil, err
 	}
 
-	migrations, err := ParseMigrationDir(r.dir)
+	migrations, err := r.migrations()
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +662,7 @@ func (r *Runner) Pending(ctx context.Context) ([]Migration, error) {
 	if err := r.ensureTable(ctx); err != nil {
 		return nil, err
 	}
-	migrations, err := ParseMigrationDir(r.dir)
+	migrations, err := r.migrations()
 	if err != nil {
 		return nil, err
 	}
