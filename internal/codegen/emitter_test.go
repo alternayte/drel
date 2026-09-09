@@ -783,7 +783,7 @@ func extractLine(s, substr string) string {
 // longer emitted for a model.
 func TestEmitTypedRepos_NoUoWRepository(t *testing.T) {
 	var b strings.Builder
-	emitTypedRepos(&b, ModelInfo{Name: "User", PKType: "int"})
+	emitTypedRepos(&b, ModelInfo{Name: "User", PKType: "int"}, nil)
 	out := b.String()
 
 	assert.Contains(t, out, "type UserRepository struct {")
