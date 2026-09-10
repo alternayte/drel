@@ -15,8 +15,17 @@ import (
 )
 
 func ScanPackages(patterns []string, dir ...string) ([]ModelInfo, error) {
+	// The mode deliberately omits NeedDeps and NeedImports. NeedDeps applies the
+	// other bits transitively, so NeedSyntax|NeedTypesInfo would make every load
+	// re-parse and re-type-check drel and its whole dependency graph from source.
+	// This scanner never reads a dependency's syntax or TypesInfo: it walks only
+	// pkg.Types.Scope(), and resolves types from other packages through
+	// types.Named (Obj().Pkg().Path(), TypeArgs()), which the type-checker
+	// satisfies from export data. Adding NeedDeps back costs roughly 5x the CPU
+	// per load and buys nothing — it once pushed this package past go test's
+	// 600s per-package default in CI.
 	cfg := &packages.Config{
-		Mode: packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedName | packages.NeedFiles | packages.NeedDeps | packages.NeedImports,
+		Mode: packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedName | packages.NeedFiles,
 	}
 	if len(dir) > 0 && dir[0] != "" {
 		cfg.Dir = dir[0]
@@ -94,6 +103,13 @@ func scanPackage(pkg *packages.Package) ([]ModelInfo, error) {
 				mi.Name, mi.PKType)
 		}
 
+		keyCols, keyIsStruct, kErr := buildKeyColumns(pkInfo, tn.Name(), pkg.PkgPath)
+		if kErr != nil {
+			return nil, kErr
+		}
+		mi.Key = keyCols
+		mi.KeyIsStruct = keyIsStruct
+
 		mi.TableName = inferTableName(tn.Name())
 		_, modelOpts, mErr := parseModelTag(pkInfo.Tag)
 		if mErr != nil {
@@ -138,10 +154,11 @@ func scanPackage(pkg *packages.Package) ([]ModelInfo, error) {
 }
 
 type pkTypeInfo struct {
-	Display string // short name for generated code (e.g., "int", "uuid.UUID")
-	Full    string // fully qualified (e.g., "github.com/google/uuid.UUID")
-	PkgPath string // import path (empty for primitives)
-	Tag     string // raw struct tag on the embedded drel.Model field
+	Display string     // short name for generated code (e.g., "int", "uuid.UUID")
+	Full    string     // fully qualified (e.g., "github.com/google/uuid.UUID")
+	PkgPath string     // import path (empty for primitives)
+	Type    types.Type // the key type argument itself
+	Tag     string     // raw struct tag on the embedded drel.Model field
 }
 
 func findModelEmbed(st *types.Struct) (info pkTypeInfo, found bool) {
@@ -178,9 +195,131 @@ func findModelEmbed(st *types.Struct) (info pkTypeInfo, found bool) {
 				}
 			}
 		}
-		return pkTypeInfo{Display: display, Full: full, PkgPath: pkgPath, Tag: st.Tag(i)}, true
+		return pkTypeInfo{Display: display, Full: full, PkgPath: pkgPath, Type: t, Tag: st.Tag(i)}, true
 	}
 	return pkTypeInfo{}, false
+}
+
+// buildKeyColumns resolves a model's primary key columns from the type argument
+// of its embedded drel.Model. A scalar type argument yields one column, named by
+// the first position of the embedded field's db tag and defaulting to "id". A
+// struct type argument yields one column per exported field, named by that
+// field's own db tag and defaulting to the snake-case field name.
+func buildKeyColumns(pk pkTypeInfo, modelName, ownerPkgPath string) ([]KeyColumn, bool, error) {
+	kst, isStruct := pk.Type.Underlying().(*types.Struct)
+	if !isStruct {
+		name := "id"
+		col, _, err := parseModelTag(pk.Tag)
+		if err != nil {
+			return nil, false, fmt.Errorf("codegen: model %s: primary key tag: %w", modelName, err)
+		}
+		if col != "" {
+			name = col
+		}
+		return []KeyColumn{{
+			ColumnName:       name,
+			GoType:           pk.Display,
+			UnderlyingGoType: keyNormalizeKind(pk.Type),
+		}}, false, nil
+	}
+
+	// A struct key takes every column name from the key struct's own field
+	// tags, so a column name in the first position of the embedded field's db
+	// tag has nowhere to apply. Reject it rather than ignore it. The other
+	// options on that tag (table=, renamed_from=) describe the table, not the
+	// key, and stay valid; scanPackage parses them separately.
+	if pkCol, _, err := parseModelTag(pk.Tag); err != nil {
+		return nil, false, fmt.Errorf("codegen: model %s: primary key tag: %w", modelName, err)
+	} else if pkCol != "" {
+		return nil, false, fmt.Errorf(
+			"codegen: model %s: db tag %q on the embedded drel.Model names a key column, but composite key type %s takes its column names from its own field tags; remove %q and put a db tag on the %s field instead",
+			modelName, pkCol, pk.Display, pkCol, pk.Display)
+	}
+
+	var cols []KeyColumn
+	for i := 0; i < kst.NumFields(); i++ {
+		f := kst.Field(i)
+		if !f.Exported() {
+			return nil, false, fmt.Errorf(
+				"codegen: model %s: composite key type %s has unexported field %q; generated code cannot read it, export the field",
+				modelName, pk.Display, f.Name())
+		}
+		if !isSupportedKeyFieldType(f.Type()) {
+			return nil, false, fmt.Errorf(
+				"codegen: model %s: composite key type %s field %q has unsupported type %s; key fields must be a signed integer, string, or uuid.UUID",
+				modelName, pk.Display, f.Name(), f.Type().String())
+		}
+		col, _, err := parseDBTag(kst.Tag(i))
+		if err != nil {
+			return nil, false, fmt.Errorf("codegen: model %s: key field %s: %w", modelName, f.Name(), err)
+		}
+		if col == "" {
+			col = toSnakeCase(f.Name())
+		}
+		// Mirror extractFields: record the field type's package unless it is
+		// the model's own package, so the emitter can import and alias it.
+		fieldPkg := typePkgPath(f.Type())
+		if fieldPkg == ownerPkgPath {
+			fieldPkg = ""
+		}
+		cols = append(cols, KeyColumn{
+			FieldName:        f.Name(),
+			ColumnName:       col,
+			GoType:           localTypeName(f.Type()),
+			PkgPath:          fieldPkg,
+			UnderlyingGoType: keyNormalizeKind(f.Type()),
+		})
+	}
+	if len(cols) == 0 {
+		return nil, false, fmt.Errorf("codegen: model %s: composite key type %s has no fields", modelName, pk.Display)
+	}
+	return cols, true, nil
+}
+
+// keyNormalizeKind classifies a key type by how a raw driver value for it must
+// be converted: "uuid.UUID", "string", or "int" for every signed integer
+// width. It returns "" for a type the emitter cannot classify, which falls
+// back to the display type. It mirrors isSupportedKeyFieldType.
+func keyNormalizeKind(t types.Type) string {
+	if n, ok := t.(*types.Named); ok {
+		if o := n.Obj(); o != nil && o.Pkg() != nil &&
+			o.Pkg().Path() == "github.com/google/uuid" && o.Name() == "UUID" {
+			return "uuid.UUID"
+		}
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	if !ok {
+		return ""
+	}
+	switch b.Kind() {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
+		// NormalizeIntKey yields a Go int whatever the column's width.
+		return "int"
+	case types.String:
+		return "string"
+	}
+	return ""
+}
+
+// isSupportedKeyFieldType reports whether a composite key field's type can be a
+// primary key column: a signed integer, a string, or uuid.UUID (including named
+// types over those).
+func isSupportedKeyFieldType(t types.Type) bool {
+	if n, ok := t.(*types.Named); ok {
+		if o := n.Obj(); o != nil && o.Pkg() != nil &&
+			o.Pkg().Path() == "github.com/google/uuid" && o.Name() == "UUID" {
+			return true
+		}
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch b.Kind() {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.String:
+		return true
+	}
+	return false
 }
 
 func detectEmbeds(st *types.Struct) (softDelete, versioned, audit bool) {

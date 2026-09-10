@@ -600,7 +600,7 @@ func TestSQLite_BuildUpdate(t *testing.T) {
 				{Column: "name", Value: "Alice"},
 				{Column: "email", Value: "alice@example.com"},
 			},
-			"id", 1,
+			[]string{"id"}, []any{1},
 		)
 		assert.Equal(t, `UPDATE "users" SET "name" = ?, "email" = ? WHERE "id" = ?`, r.SQL)
 		assert.Equal(t, []any{"Alice", "alice@example.com", 1}, r.Args)
@@ -612,7 +612,7 @@ func TestSQLite_BuildUpdate(t *testing.T) {
 				{Column: "updated_at", Value: dialect.RawExpr{SQL: "CURRENT_TIMESTAMP"}},
 				{Column: "stock", Value: 99},
 			},
-			"id", 5,
+			[]string{"id"}, []any{5},
 		)
 		assert.Equal(t, `UPDATE "products" SET "updated_at" = CURRENT_TIMESTAMP, "stock" = ? WHERE "id" = ?`, r.SQL)
 		assert.Equal(t, []any{99, 5}, r.Args)
@@ -623,7 +623,7 @@ func TestSQLite_BuildUpdate(t *testing.T) {
 
 func TestSQLite_BuildDelete(t *testing.T) {
 	s := New()
-	r := s.BuildDelete("users", "id", 42)
+	r := s.BuildDelete("users", []string{"id"}, []any{42})
 	assert.Equal(t, `DELETE FROM "users" WHERE "id" = ?`, r.SQL)
 	assert.Equal(t, []any{42}, r.Args)
 }
@@ -632,7 +632,7 @@ func TestSQLite_BuildDelete(t *testing.T) {
 
 func TestSQLite_BuildSoftDelete(t *testing.T) {
 	s := New()
-	r := s.BuildSoftDelete("users", "id", 7)
+	r := s.BuildSoftDelete("users", []string{"id"}, []any{7})
 	assert.Equal(t, `UPDATE "users" SET "deleted_at" = CURRENT_TIMESTAMP WHERE "id" = ?`, r.SQL)
 	assert.Equal(t, []any{7}, r.Args)
 	assert.NotContains(t, r.SQL, "NOW()")
@@ -644,7 +644,7 @@ func TestSQLite_BuildUpdateVersioned(t *testing.T) {
 	s := New()
 	r := s.BuildUpdateVersioned("items",
 		[]dialect.ColumnValue{{Column: "name", Value: "Widget"}},
-		"id", 3, "version", 2,
+		[]string{"id"}, []any{3}, "version", 2,
 	)
 	assert.Equal(t,
 		`UPDATE "items" SET "name" = ?, "version" = "version" + 1 WHERE "id" = ? AND "version" = ? RETURNING "version"`,
@@ -933,7 +933,7 @@ func TestSQLite_BuildUpdate_DeduplicatesColumns(t *testing.T) {
 			{Column: "updated_by", Value: "alice"},
 			{Column: "updated_by", Value: "bob"},
 		},
-		"id", 5)
+		[]string{"id"}, []any{5})
 	assert.Equal(t,
 		`UPDATE "a_products" SET "name" = ?, "updated_by" = ? WHERE "id" = ?`,
 		res.SQL)
@@ -948,7 +948,7 @@ func TestSQLite_BuildUpdateVersioned_DeduplicatesColumns(t *testing.T) {
 			{Column: "updated_by", Value: "alice"},
 			{Column: "updated_by", Value: "bob"},
 		},
-		"id", 5, "version", 2)
+		[]string{"id"}, []any{5}, "version", 2)
 	assert.Equal(t,
 		`UPDATE "a_products" SET "name" = ?, "updated_by" = ?, "version" = "version" + 1 WHERE "id" = ? AND "version" = ? RETURNING "version"`,
 		res.SQL)
@@ -957,7 +957,7 @@ func TestSQLite_BuildUpdateVersioned_DeduplicatesColumns(t *testing.T) {
 
 func TestSQLite_BuildDeleteVersioned(t *testing.T) {
 	s := New()
-	res := s.BuildDeleteVersioned("v_products", "id", 7, "version", 3)
+	res := s.BuildDeleteVersioned("v_products", []string{"id"}, []any{7}, "version", 3)
 	assert.Equal(t,
 		`DELETE FROM "v_products" WHERE "id" = ? AND "version" = ? RETURNING "id"`,
 		res.SQL)
@@ -966,7 +966,7 @@ func TestSQLite_BuildDeleteVersioned(t *testing.T) {
 
 func TestSQLite_BuildSoftDeleteVersioned(t *testing.T) {
 	s := New()
-	res := s.BuildSoftDeleteVersioned("v_products", "id", 7, "version", 3)
+	res := s.BuildSoftDeleteVersioned("v_products", []string{"id"}, []any{7}, "version", 3)
 	assert.Equal(t,
 		`UPDATE "v_products" SET "deleted_at" = CURRENT_TIMESTAMP, "version" = "version" + 1 WHERE "id" = ? AND "version" = ? RETURNING "id"`,
 		res.SQL)
@@ -1277,4 +1277,56 @@ func TestWriteComparison_TimeArgsNormalized(t *testing.T) {
 	})
 	assert.Equal(t, want, r.Args[0], "In[0]: time.Time arg must be UTC")
 	assert.Equal(t, want, r.Args[1], "In[1]: time.Time arg must be UTC")
+}
+
+func TestSQLite_BuildDelete_CompositeKey(t *testing.T) {
+	s := New()
+	got := s.BuildDelete("order_lines", []string{"order_id", "line_no"}, []any{3, 1})
+	assert.Equal(t, `DELETE FROM "order_lines" WHERE "order_id" = ? AND "line_no" = ?`, got.SQL)
+	assert.Equal(t, []any{3, 1}, got.Args)
+}
+
+func TestSQLite_BuildUpdate_CompositeKey(t *testing.T) {
+	s := New()
+	got := s.BuildUpdate("order_lines",
+		[]dialect.ColumnValue{{Column: "qty", Value: 5}},
+		[]string{"order_id", "line_no"}, []any{3, 1})
+	assert.Equal(t, `UPDATE "order_lines" SET "qty" = ? WHERE "order_id" = ? AND "line_no" = ?`, got.SQL)
+	assert.Equal(t, []any{5, 3, 1}, got.Args)
+}
+
+func TestSQLite_BuildSoftDelete_CompositeKey(t *testing.T) {
+	s := New()
+	got := s.BuildSoftDelete("order_lines", []string{"order_id", "line_no"}, []any{3, 1})
+	assert.Equal(t, `UPDATE "order_lines" SET "deleted_at" = CURRENT_TIMESTAMP WHERE "order_id" = ? AND "line_no" = ?`, got.SQL)
+	assert.Equal(t, []any{3, 1}, got.Args)
+}
+
+func TestSQLite_BuildDeleteVersioned_CompositeKeyReturnsTheFirstKeyColumn(t *testing.T) {
+	s := New()
+	got := s.BuildDeleteVersioned("order_lines", []string{"order_id", "line_no"}, []any{3, 1}, "version", 4)
+	assert.Equal(t,
+		`DELETE FROM "order_lines" WHERE "order_id" = ? AND "line_no" = ? AND "version" = ? RETURNING "order_id"`,
+		got.SQL)
+	assert.Equal(t, []any{3, 1, 4}, got.Args)
+}
+
+func TestSQLite_BuildSoftDeleteVersioned_CompositeKey(t *testing.T) {
+	s := New()
+	got := s.BuildSoftDeleteVersioned("order_lines", []string{"order_id", "line_no"}, []any{3, 1}, "version", 4)
+	assert.Equal(t,
+		`UPDATE "order_lines" SET "deleted_at" = CURRENT_TIMESTAMP, "version" = "version" + 1 WHERE "order_id" = ? AND "line_no" = ? AND "version" = ? RETURNING "order_id"`,
+		got.SQL)
+	assert.Equal(t, []any{3, 1, 4}, got.Args)
+}
+
+func TestSQLite_BuildUpdateVersioned_CompositeKey(t *testing.T) {
+	s := New()
+	got := s.BuildUpdateVersioned("order_lines",
+		[]dialect.ColumnValue{{Column: "qty", Value: 5}},
+		[]string{"order_id", "line_no"}, []any{3, 1}, "version", 4)
+	assert.Equal(t,
+		`UPDATE "order_lines" SET "qty" = ?, "version" = "version" + 1 WHERE "order_id" = ? AND "line_no" = ? AND "version" = ? RETURNING "version"`,
+		got.SQL)
+	assert.Equal(t, []any{5, 3, 1, 4}, got.Args)
 }

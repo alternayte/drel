@@ -32,9 +32,9 @@ type benchTaskSnapshot struct {
 }
 
 var benchTaskMeta = drel.ModelMeta[benchTask]{
-	Table:    "bench_tasks",
-	Columns:  []string{"id", "title", "status", "priority", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "bench_tasks",
+	Columns:   []string{"id", "title", "status", "priority", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*benchTask, error) {
 		t := &benchTask{}
 		err := row.Scan(&t.ID, &t.Title, &t.Status, &t.Priority, &t.CreatedAt, &t.UpdatedAt)

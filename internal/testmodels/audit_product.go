@@ -26,10 +26,10 @@ type apSnapshot struct {
 }
 
 var AuditProductMeta = drel.ModelMeta[AuditProduct]{
-	Table:    "a_products",
-	Columns:  []string{"id", "name", "price", "created_by", "updated_by", "created_at", "updated_at"},
-	PKColumn: "id",
-	HasAudit: true,
+	Table:     "a_products",
+	Columns:   []string{"id", "name", "price", "created_by", "updated_by", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
+	HasAudit:  true,
 	AuditSetCreate: func(p *AuditProduct, actor string) {
 		createdByPtr, updatedByPtr := p.AuditPtrs()
 		*createdByPtr = actor

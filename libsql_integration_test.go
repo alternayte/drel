@@ -24,7 +24,7 @@ type lsItem struct {
 }
 
 var lsItemMeta = drel.ModelMeta[lsItem]{
-	Table: "ls_items", Columns: []string{"id", "title", "created_at", "updated_at"}, PKColumn: "id",
+	Table: "ls_items", Columns: []string{"id", "title", "created_at", "updated_at"}, PKColumns: []string{"id"},
 	Scan: func(r drel.Row) (*lsItem, error) {
 		it := &lsItem{}
 		return it, r.Scan(&it.ID, &it.Title, &it.CreatedAt, &it.UpdatedAt)

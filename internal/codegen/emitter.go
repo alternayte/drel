@@ -60,6 +60,14 @@ func resolvePKDisplay(m ModelInfo, aliases map[string]string) string {
 	if m.PKTypePkg == "" {
 		return m.PKType
 	}
+	// The key type lives in the model's own package, and the generated file is
+	// written into that package, so it must be spelled without a qualifier.
+	if m.PKTypePkg == m.PkgPath {
+		if i := strings.LastIndex(m.PKType, "."); i >= 0 {
+			return m.PKType[i+1:]
+		}
+		return m.PKType
+	}
 	alias := path.Base(m.PKTypePkg)
 	if a, ok := aliases[m.PKTypePkg]; ok {
 		alias = a
@@ -69,6 +77,15 @@ func resolvePKDisplay(m ModelInfo, aliases map[string]string) string {
 		return alias + "." + parts[1]
 	}
 	return m.PKType
+}
+
+// pkColumnName returns the column that holds a scalar primary key. The db tag
+// on the embedded drel.Model can rename it, so it is not always "id".
+func pkColumnName(m ModelInfo) string {
+	if len(m.Key) == 1 {
+		return m.Key[0].ColumnName
+	}
+	return "id"
 }
 
 // columnTypeName returns the drel column type for a Go type.
@@ -174,6 +191,13 @@ func buildModelImportAliases(m ModelInfo) map[string]string {
 
 	if m.PKTypePkg != "" {
 		addPkg(m.PKTypePkg)
+	}
+	// A struct key's field types live in their own packages, which nothing
+	// else in the model necessarily imports.
+	for _, kc := range m.Key {
+		if kc.PkgPath != "" {
+			addPkg(kc.PkgPath)
+		}
 	}
 	for _, f := range columnFields(m.Fields) {
 		if f.TypePkgPath != "" {
@@ -332,6 +356,9 @@ func EmitModelFile(m ModelInfo) string {
 	// --- PK value ---
 	b.WriteString(fmt.Sprintf("func %sPKValue(p *%s) any {\n\treturn p.ID()\n}\n\n", lower, m.Name))
 
+	// --- Key splitter (struct keys only) ---
+	emitKeyValues(&b, m, lower, aliases)
+
 	// --- Column value ---
 	emitColumnValue(&b, m, lower, allCols, aliases)
 
@@ -339,21 +366,21 @@ func EmitModelFile(m ModelInfo) string {
 	emitInsertColumns(&b, m, lower, aliases)
 
 	// --- Scan returning ---
-	emitScanReturning(&b, m, lower)
+	emitScanReturning(&b, m, lower, aliases)
 
 	// --- Key normalizer (matches pivot keys to the canonical PK type) ---
-	emitNormalizeKey(&b, m, lower)
+	emitNormalizeKey(&b, m, lower, aliases)
 
-	// --- Key funcs (app-assigned PKs only) ---
-	if isAppAssignedPK(m.PKType) {
-		emitKeyFuncs(&b, m, lower)
+	// --- Key funcs (app-assigned PKs only; a struct key is always app-assigned) ---
+	if m.KeyIsStruct || isAppAssignedPK(m.PKType) {
+		emitKeyFuncs(&b, m, lower, aliases)
 	}
 
 	// --- ModelMeta ---
-	emitMeta(&b, m, lower, varPlural, allCols)
+	emitMeta(&b, m, lower, varPlural, allCols, aliases)
 
 	// --- Typed repository wrappers ---
-	emitTypedRepos(&b, m)
+	emitTypedRepos(&b, m, aliases)
 
 	return b.String()
 }
@@ -362,9 +389,16 @@ func emitColumnRefs(b *strings.Builder, m ModelInfo, varPlural string, aliases m
 	colFields := columnFields(m.Fields)
 	// Struct type definition
 	b.WriteString(fmt.Sprintf("var %s = struct {\n", varPlural))
-	// ID column - always present, derived from PKType
+	// Key columns. A scalar key is one ID column; a composite key is one column
+	// for each key field, because no single column holds the key.
 	pkDisplay := resolvePKDisplay(m, aliases)
-	b.WriteString(fmt.Sprintf("\tID %s\n", columnTypeName(pkDisplay)))
+	if m.IsCompositeKey() {
+		for _, kc := range m.Key {
+			b.WriteString(fmt.Sprintf("\t%s %s\n", exportName(kc.FieldName), columnTypeName(keyColumnDisplayType(kc, aliases))))
+		}
+	} else {
+		b.WriteString(fmt.Sprintf("\tID %s\n", columnTypeName(pkDisplay)))
+	}
 	for _, f := range colFields {
 		if f.IsMultiColVO {
 			for _, sub := range f.MultiColNames {
@@ -389,7 +423,13 @@ func emitColumnRefs(b *strings.Builder, m ModelInfo, varPlural string, aliases m
 	b.WriteString("}{\n")
 
 	// Struct literal values
-	b.WriteString(fmt.Sprintf("\tID: %s,\n", columnConstructor(pkDisplay, "id")))
+	if m.IsCompositeKey() {
+		for _, kc := range m.Key {
+			b.WriteString(fmt.Sprintf("\t%s: %s,\n", exportName(kc.FieldName), columnConstructor(keyColumnDisplayType(kc, aliases), kc.ColumnName)))
+		}
+	} else {
+		b.WriteString(fmt.Sprintf("\tID: %s,\n", columnConstructor(pkDisplay, pkColumnName(m))))
+	}
 	for _, f := range colFields {
 		if f.IsMultiColVO {
 			for _, sub := range f.MultiColNames {
@@ -453,7 +493,10 @@ func emitEnumValidators(b *strings.Builder, m ModelInfo) {
 
 // allColumns returns the full ordered list of column names for this model.
 func allColumns(m ModelInfo) []string {
-	cols := []string{"id"}
+	cols := m.PKColumns()
+	if len(cols) == 0 {
+		cols = []string{"id"}
+	}
 	for _, f := range columnFields(m.Fields) {
 		if f.IsMultiColVO {
 			cols = append(cols, f.MultiColNames...)
@@ -490,7 +533,15 @@ func emitMultiValHelpers(b *strings.Builder, m ModelInfo, lower string, aliases 
 func emitScanFunc(b *strings.Builder, m ModelInfo, lower string, allCols []string, aliases map[string]string) {
 	b.WriteString(fmt.Sprintf("func scan%s(row drel.Row) (*%s, error) {\n", exportName(lower), m.Name))
 	b.WriteString(fmt.Sprintf("\tp := &%s{}\n", m.Name))
-	b.WriteString("\tidPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
+	composite := m.IsCompositeKey()
+	if composite {
+		// No single column holds the key, so scan each key column into its own
+		// field and set the key after the scan.
+		b.WriteString("\t_, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
+		b.WriteString(fmt.Sprintf("\tvar k %s\n", resolvePKDisplay(m, aliases)))
+	} else {
+		b.WriteString("\tidPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
+	}
 	if m.HasAudit {
 		b.WriteString("\tcreatedByPtr, updatedByPtr := p.AuditPtrs()\n")
 	}
@@ -504,7 +555,13 @@ func emitScanFunc(b *strings.Builder, m ModelInfo, lower string, allCols []strin
 
 	// Build scan args
 	var scanArgs []string
-	scanArgs = append(scanArgs, "idPtr")
+	if composite {
+		for _, kc := range m.Key {
+			scanArgs = append(scanArgs, "&k."+kc.FieldName)
+		}
+	} else {
+		scanArgs = append(scanArgs, "idPtr")
+	}
 	for _, f := range columnFields(m.Fields) {
 		if f.IsMultiColVO {
 			for i := range f.MultiColNames {
@@ -536,6 +593,9 @@ func emitScanFunc(b *strings.Builder, m ModelInfo, lower string, allCols []strin
 
 	b.WriteString(fmt.Sprintf("\terr := row.Scan(%s)\n", strings.Join(scanArgs, ", ")))
 	b.WriteString("\tif err != nil {\n\t\treturn nil, err\n\t}\n")
+	if composite {
+		b.WriteString("\tp.SetID(k)\n")
+	}
 	// Reconstruct multi-col VO fields from scan temporaries.
 	for _, f := range columnFields(m.Fields) {
 		if f.IsMultiColVO {
@@ -623,9 +683,16 @@ func emitColumnValue(b *strings.Builder, m ModelInfo, lower string, allCols []st
 	b.WriteString("\tswitch idx {\n")
 
 	idx := 0
-	// id (index 0)
-	b.WriteString(fmt.Sprintf("\tcase %d:\n\t\treturn p.ID()\n", idx))
-	idx++
+	// The key columns come first, in key order.
+	if m.IsCompositeKey() {
+		for _, kc := range m.Key {
+			b.WriteString(fmt.Sprintf("\tcase %d:\n\t\treturn p.ID().%s\n", idx, kc.FieldName))
+			idx++
+		}
+	} else {
+		b.WriteString(fmt.Sprintf("\tcase %d:\n\t\treturn p.ID()\n", idx))
+		idx++
+	}
 
 	// User-defined columns
 	for _, f := range columnFields(m.Fields) {
@@ -695,10 +762,26 @@ func emitInsertColumns(b *strings.Builder, m ModelInfo, lower string, aliases ma
 	b.WriteString("}\n\n")
 }
 
-func emitScanReturning(b *strings.Builder, m ModelInfo, lower string) {
+func emitScanReturning(b *strings.Builder, m ModelInfo, lower string, aliases map[string]string) {
 	b.WriteString(fmt.Sprintf("func %sScanReturning(p *%s, row drel.Row) error {\n", lower, m.Name))
-	b.WriteString("\tidPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
-	b.WriteString("\treturn row.Scan(idPtr, createdAtPtr, updatedAtPtr)\n")
+	if !m.IsCompositeKey() {
+		b.WriteString("\tidPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
+		b.WriteString("\treturn row.Scan(idPtr, createdAtPtr, updatedAtPtr)\n")
+		b.WriteString("}\n\n")
+		return
+	}
+	// The RETURNING list of a composite key is one item for each key column, so
+	// the key cannot be scanned as a single destination.
+	b.WriteString("\t_, createdAtPtr, updatedAtPtr := p.ScanPtrs()\n")
+	b.WriteString(fmt.Sprintf("\tvar k %s\n", resolvePKDisplay(m, aliases)))
+	dests := make([]string, 0, len(m.Key)+2)
+	for _, kc := range m.Key {
+		dests = append(dests, "&k."+kc.FieldName)
+	}
+	dests = append(dests, "createdAtPtr", "updatedAtPtr")
+	b.WriteString(fmt.Sprintf("\tif err := row.Scan(%s); err != nil {\n\t\treturn err\n\t}\n", strings.Join(dests, ", ")))
+	b.WriteString("\tp.SetID(k)\n")
+	b.WriteString("\treturn nil\n")
 	b.WriteString("}\n\n")
 }
 
@@ -714,25 +797,145 @@ func isAppAssignedPK(pkType string) bool {
 	}
 }
 
-func emitNormalizeKey(b *strings.Builder, m ModelInfo, lower string) {
-	b.WriteString(fmt.Sprintf("func %sNormalizeKey(v any) any {\n", lower))
-	switch {
-	case m.PKType == "uuid.UUID":
-		b.WriteString("\treturn drel.NormalizeUUIDKey(v)\n")
-	case isAppAssignedPK(m.PKType):
-		// string or other app-assigned key: identity.
-		b.WriteString("\treturn v\n")
-	default:
-		// integer auto-increment PK.
-		b.WriteString("\treturn drel.NormalizeIntKey(v)\n")
+// emitKeyValues emits the splitter that turns a struct key into one value per
+// key column, in key order. A scalar key needs no splitter: a nil KeyValues is
+// the single-column default.
+func emitKeyValues(b *strings.Builder, m ModelInfo, lower string, aliases map[string]string) {
+	if !m.KeyIsStruct {
+		return
 	}
+	pkDisplay := resolvePKDisplay(m, aliases)
+	b.WriteString(fmt.Sprintf("// %sKeyValues splits a %s into one value per key column, in key order.\n", lower, pkDisplay))
+	b.WriteString(fmt.Sprintf("func %sKeyValues(key any) []any {\n", lower))
+	b.WriteString(fmt.Sprintf("\tk := key.(%s)\n", pkDisplay))
+	parts := make([]string, len(m.Key))
+	for i, kc := range m.Key {
+		parts[i] = "k." + kc.FieldName
+	}
+	b.WriteString(fmt.Sprintf("\treturn []any{%s}\n}\n\n", strings.Join(parts, ", ")))
+}
+
+// normalizeKeyExpr returns the expression that converts one raw driver value
+// into a value of kind, which must be "uuid.UUID", "string", or "int". It is
+// the single source of the per-type conversion rule, shared by the scalar and
+// the struct key normalizers.
+func normalizeKeyExpr(kind, valExpr string) string {
+	switch {
+	case kind == "uuid.UUID":
+		return fmt.Sprintf("drel.NormalizeUUIDKey(%s)", valExpr)
+	case isAppAssignedPK(kind):
+		// string or other app-assigned key: identity.
+		return valExpr
+	default:
+		// integer key column.
+		return fmt.Sprintf("drel.NormalizeIntKey(%s)", valExpr)
+	}
+}
+
+// keyColumnDisplayType returns the type name to write for a key column in
+// generated code, package-qualified with the file's own import alias. It
+// mirrors fieldDisplayType.
+func keyColumnDisplayType(kc KeyColumn, aliases map[string]string) string {
+	if kc.PkgPath == "" {
+		return kc.GoType
+	}
+	alias := path.Base(kc.PkgPath)
+	if a, ok := aliases[kc.PkgPath]; ok {
+		alias = a
+	}
+	return alias + "." + kc.GoType
+}
+
+// normalizeKind returns the normalization kind for a key column: the rule that
+// converts a raw driver value, and the type that rule yields. It falls back to
+// the display type for a column the scanner did not classify.
+func normalizeKind(kc KeyColumn) string {
+	if kc.UnderlyingGoType != "" {
+		return kc.UnderlyingGoType
+	}
+	if kc.PkgPath == "github.com/google/uuid" && kc.GoType == "UUID" {
+		return "uuid.UUID"
+	}
+	return kc.GoType
+}
+
+// normalizeKeyParts returns the expression that converts valExpr, the type to
+// assert that expression to, and the type to convert the asserted value into
+// before it is stored. convert is empty when no conversion is needed.
+//
+// drel.NormalizeIntKey yields a Go int whatever the column's width, and a
+// named type is never the dynamic type of a driver value, so the assertion is
+// always to the kind and the declared type is reached by conversion.
+func normalizeKeyParts(kc KeyColumn, aliases map[string]string, valExpr string) (expr, assertType, convert string) {
+	kind := normalizeKind(kc)
+	display := keyColumnDisplayType(kc, aliases)
+	expr = normalizeKeyExpr(kind, valExpr)
+	if kind == "uuid.UUID" {
+		// The aliased name is the only spelling of this type in the file.
+		return expr, display, ""
+	}
+	if display == kind {
+		return expr, kind, ""
+	}
+	return expr, kind, display
+}
+
+func emitNormalizeKey(b *strings.Builder, m ModelInfo, lower string, aliases map[string]string) {
+	if m.KeyIsStruct {
+		emitStructNormalizeKey(b, m, lower, aliases)
+		return
+	}
+	kc := scalarKeyColumn(m, aliases)
+	expr, assertType, convert := normalizeKeyParts(kc, aliases, "v")
+	b.WriteString(fmt.Sprintf("func %sNormalizeKey(v any) any {\n", lower))
+	if convert == "" {
+		b.WriteString(fmt.Sprintf("\treturn %s\n", expr))
+		b.WriteString("}\n\n")
+		return
+	}
+	b.WriteString(fmt.Sprintf("\tx, ok := %s.(%s)\n", expr, assertType))
+	b.WriteString("\tif !ok {\n\t\treturn v\n\t}\n")
+	b.WriteString(fmt.Sprintf("\treturn %s(x)\n", convert))
 	b.WriteString("}\n\n")
 }
 
-func emitKeyFuncs(b *strings.Builder, m ModelInfo, lower string) {
-	// emitTypedRepos renders FindByID with the raw m.PKType (e.g. "uuid.UUID");
-	// use the same so the type matches the generated import alias.
-	pkType := m.PKType
+// scalarKeyColumn describes a scalar primary key as a single key column. The
+// key type is spelled with the model's own PK display name, which carries the
+// import alias, so the column's own PkgPath is not used.
+func scalarKeyColumn(m ModelInfo, aliases map[string]string) KeyColumn {
+	kc := KeyColumn{GoType: resolvePKDisplay(m, aliases)}
+	if len(m.Key) == 1 {
+		kc.UnderlyingGoType = m.Key[0].UnderlyingGoType
+	}
+	return kc
+}
+
+func emitStructNormalizeKey(b *strings.Builder, m ModelInfo, lower string, aliases map[string]string) {
+	pkDisplay := resolvePKDisplay(m, aliases)
+	b.WriteString(fmt.Sprintf("// %sNormalizeKey converts per-column driver values into a canonical %s,\n", lower, pkDisplay))
+	b.WriteString("// so a key read back from the driver compares equal to PKValue.\n")
+	b.WriteString(fmt.Sprintf("func %sNormalizeKey(v any) any {\n", lower))
+	b.WriteString("\tvals, ok := v.([]any)\n")
+	b.WriteString("\tif !ok {\n\t\treturn v\n\t}\n")
+	b.WriteString(fmt.Sprintf("\tif len(vals) != %d {\n\t\treturn v\n\t}\n", len(m.Key)))
+	b.WriteString(fmt.Sprintf("\tvar k %s\n", pkDisplay))
+	for i, kc := range m.Key {
+		expr, assertType, convert := normalizeKeyParts(kc, aliases, fmt.Sprintf("vals[%d]", i))
+		b.WriteString(fmt.Sprintf("\tf%d, ok := %s.(%s)\n", i, expr, assertType))
+		b.WriteString("\tif !ok {\n\t\treturn v\n\t}\n")
+		if convert == "" {
+			b.WriteString(fmt.Sprintf("\tk.%s = f%d\n", kc.FieldName, i))
+			continue
+		}
+		b.WriteString(fmt.Sprintf("\tk.%s = %s(f%d)\n", kc.FieldName, convert, i))
+	}
+	b.WriteString("\treturn k\n}\n\n")
+}
+
+func emitKeyFuncs(b *strings.Builder, m ModelInfo, lower string, aliases map[string]string) {
+	// emitTypedRepos renders FindByID with the same display type, so both match
+	// the generated import alias.
+	pkType := resolvePKDisplay(m, aliases)
 
 	b.WriteString(fmt.Sprintf("func %sKeyIsZero(p *%s) bool {\n", lower, m.Name))
 	b.WriteString(fmt.Sprintf("\tvar zero %s\n", pkType))
@@ -743,8 +946,8 @@ func emitKeyFuncs(b *strings.Builder, m ModelInfo, lower string) {
 	b.WriteString("\treturn row.Scan(createdAtPtr, updatedAtPtr)\n}\n\n")
 }
 
-func emitTypedRepos(b *strings.Builder, m ModelInfo) {
-	pkType := m.PKType
+func emitTypedRepos(b *strings.Builder, m ModelInfo, aliases map[string]string) {
+	pkType := resolvePKDisplay(m, aliases)
 
 	b.WriteString(fmt.Sprintf("\ntype %sRepository struct {\n", m.Name))
 	b.WriteString(fmt.Sprintf("\t*drel.Repository[%s]\n", m.Name))
@@ -763,7 +966,7 @@ func emitTypedRepos(b *strings.Builder, m ModelInfo) {
 	b.WriteString("}\n")
 }
 
-func emitMeta(b *strings.Builder, m ModelInfo, lower, varPlural string, allCols []string) {
+func emitMeta(b *strings.Builder, m ModelInfo, lower, varPlural string, allCols []string, aliases map[string]string) {
 	b.WriteString(fmt.Sprintf("var %sMeta = drel.ModelMeta[%s]{\n", m.Name, m.Name))
 	b.WriteString(fmt.Sprintf("\tTable:   %q,\n", m.TableName))
 
@@ -772,18 +975,26 @@ func emitMeta(b *strings.Builder, m ModelInfo, lower, varPlural string, allCols 
 		quoted[i] = fmt.Sprintf("%q", c)
 	}
 	b.WriteString(fmt.Sprintf("\tColumns: []string{%s},\n", strings.Join(quoted, ", ")))
-	b.WriteString("\tPKColumn: \"id\",\n")
+	pkQuoted := make([]string, len(m.PKColumns()))
+	for i, c := range m.PKColumns() {
+		pkQuoted[i] = fmt.Sprintf("%q", c)
+	}
+	b.WriteString(fmt.Sprintf("\tPKColumns: []string{%s},\n", strings.Join(pkQuoted, ", ")))
 	b.WriteString(fmt.Sprintf("\tScan:          scan%s,\n", exportName(lower)))
 	b.WriteString(fmt.Sprintf("\tSnapshot:      snapshot%s,\n", exportName(lower)))
 	b.WriteString(fmt.Sprintf("\tDiff:          diff%s,\n", exportName(lower)))
 	b.WriteString(fmt.Sprintf("\tPKValue:       %sPKValue,\n", lower))
+	if m.KeyIsStruct {
+		b.WriteString(fmt.Sprintf("\tKeyValues:     %sKeyValues,\n", lower))
+	}
 	b.WriteString(fmt.Sprintf("\tInsertColumns: %sInsertColumns,\n", lower))
 	b.WriteString(fmt.Sprintf("\tScanReturning: %sScanReturning,\n", lower))
 	b.WriteString(fmt.Sprintf("\tColumnValue:   %sColumnValue,\n", lower))
 	b.WriteString(fmt.Sprintf("\tNormalizeKey:  %sNormalizeKey,\n", lower))
 
-	if isAppAssignedPK(m.PKType) {
-		pkType := m.PKType
+	// A struct key is always application-assigned.
+	if m.KeyIsStruct || isAppAssignedPK(m.PKType) {
+		pkType := resolvePKDisplay(m, aliases)
 		b.WriteString("\tKeyStrategy: drel.KeyAppAssigned,\n")
 		if m.PKType == "uuid.UUID" {
 			b.WriteString("\tGenerateKey: drel.UUIDv7Key,\n")

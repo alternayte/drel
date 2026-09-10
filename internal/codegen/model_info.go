@@ -19,7 +19,40 @@ type ModelInfo struct {
 	// Module is the feature slice this model belongs to. It is empty for a
 	// config that lists packages instead of modules.
 	Module string
+	// Key lists the primary key columns in key order. A scalar key type has
+	// exactly one entry whose FieldName is empty.
+	Key []KeyColumn
+	// KeyIsStruct reports whether the key type argument is a struct.
+	KeyIsStruct bool
 }
+
+// KeyColumn is one column of a model's primary key.
+type KeyColumn struct {
+	FieldName  string // exported Go field on the key struct; empty for a scalar key
+	ColumnName string // database column name
+	GoType     string // local Go type name, e.g. "int" or "UUID"
+	// PkgPath is the import path of the field's type. It is empty for a
+	// builtin type and for a type declared in the model's own package.
+	PkgPath string
+	// UnderlyingGoType is the normalization kind of the column: "int" for any
+	// signed integer, "string", or "uuid.UUID". It selects the conversion
+	// rule and names the type the conversion helper returns, which is not
+	// always GoType: a named type or a sized integer needs a conversion back.
+	UnderlyingGoType string
+}
+
+// PKColumns returns the primary key column names in key order.
+func (m ModelInfo) PKColumns() []string {
+	out := make([]string, len(m.Key))
+	for i, k := range m.Key {
+		out[i] = k.ColumnName
+	}
+	return out
+}
+
+// IsCompositeKey reports whether the model's primary key spans more than one
+// column.
+func (m ModelInfo) IsCompositeKey() bool { return len(m.Key) > 1 }
 
 type FieldInfo struct {
 	Name       string

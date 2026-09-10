@@ -125,7 +125,7 @@ func articleNormalizeKey(v any) any {
 var ArticleMeta = drel.ModelMeta[Article]{
 	Table:         "articles",
 	Columns:       []string{"id", "title", "body", "tags", "metadata", "deleted_at", "version", "created_by", "updated_by", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanArticle,
 	Snapshot:      snapshotArticle,
 	Diff:          diffArticle,

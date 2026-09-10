@@ -16,7 +16,7 @@ func akOrderMeta() ModelMeta[akOrder] {
 	return ModelMeta[akOrder]{
 		Table:       "ak_orders",
 		Columns:     []string{"id", "name", "created_at", "updated_at"},
-		PKColumn:    "id",
+		PKColumns:   []string{"id"},
 		KeyStrategy: KeyAppAssigned,
 		GenerateKey: UUIDv7Key,
 		SetKey:      func(p *akOrder, k any) { p.SetID(k.(uuid.UUID)) },

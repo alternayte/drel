@@ -719,3 +719,301 @@ func TestScan_ModelCarriesItsTableRenameMarker(t *testing.T) {
 	assert.Equal(t, "orders", models[0].TableName)
 	assert.Equal(t, "purchases", models[0].RenamedFrom)
 }
+
+// scanSourceErr is scanSource's error-returning twin, for tests that expect a
+// scan to be rejected.
+func scanSourceErr(t *testing.T, src string) ([]ModelInfo, error) {
+	t.Helper()
+	dir := setupTestModule(t, map[string]string{
+		"models/model.go": src,
+	})
+	return ScanPackages([]string{"./models"}, dir)
+}
+
+func TestScan_ScalarKeyDefaultsToIDColumn(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type User struct {
+	drel.Model[int]
+	Name string
+}
+`)
+	require.Len(t, models, 1)
+	assert.False(t, models[0].KeyIsStruct)
+	assert.Equal(t, []string{"id"}, models[0].PKColumns())
+	assert.False(t, models[0].IsCompositeKey())
+}
+
+func TestScan_ScalarKeyTakesItsColumnNameFromTheEmbeddedTag(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type Country struct {
+	drel.Model[string] `+"`"+`db:"code"`+"`"+`
+	Name string
+}
+`)
+	require.Len(t, models, 1)
+	assert.Equal(t, []string{"code"}, models[0].PKColumns())
+	assert.Equal(t, "string", models[0].Key[0].GoType)
+	assert.Equal(t, "", models[0].Key[0].FieldName)
+}
+
+func TestScan_StructKeyGivesOneColumnPerField(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type OrderLineKey struct {
+	OrderID int `+"`"+`db:"order_id"`+"`"+`
+	LineNo  int `+"`"+`db:"line_no"`+"`"+`
+}
+
+type OrderLine struct {
+	drel.Model[OrderLineKey]
+	Qty int
+}
+`)
+	var ol ModelInfo
+	for _, m := range models {
+		if m.Name == "OrderLine" {
+			ol = m
+		}
+	}
+	assert.True(t, ol.KeyIsStruct)
+	assert.True(t, ol.IsCompositeKey())
+	assert.Equal(t, []string{"order_id", "line_no"}, ol.PKColumns())
+	assert.Equal(t, "OrderID", ol.Key[0].FieldName)
+	assert.Equal(t, "int", ol.Key[0].GoType)
+}
+
+func TestScan_StructKeyFieldWithoutATagUsesSnakeCase(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type K struct {
+	TenantID int
+	SeqNo    int
+}
+
+type Row struct {
+	drel.Model[K]
+}
+`)
+	var r ModelInfo
+	for _, m := range models {
+		if m.Name == "Row" {
+			r = m
+		}
+	}
+	assert.Equal(t, []string{"tenant_id", "seq_no"}, r.PKColumns())
+}
+
+func TestScan_StructKeyWithAnUnexportedFieldIsRejected(t *testing.T) {
+	_, err := scanSourceErr(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type K struct {
+	TenantID int
+	seq      int
+}
+
+type Row struct {
+	drel.Model[K]
+}
+`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "seq")
+	assert.Contains(t, err.Error(), "unexported")
+}
+
+func TestScan_StructKeyWithAnUnsupportedFieldTypeIsRejected(t *testing.T) {
+	_, err := scanSourceErr(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type K struct {
+	A int
+	B float64
+}
+
+type Row struct {
+	drel.Model[K]
+}
+`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "B")
+}
+
+func TestScan_EmptyStructKeyIsRejected(t *testing.T) {
+	_, err := scanSourceErr(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type K struct{}
+
+type Row struct {
+	drel.Model[K]
+}
+`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no fields")
+}
+
+func TestScan_StructKeyFieldRecordsItsTypePackage(t *testing.T) {
+	dir := setupTestModule(t, map[string]string{
+		"ids/ids.go": `package ids
+
+type TenantID string
+`,
+		"models/model.go": `package m
+
+import (
+	"github.com/alternayte/drel"
+	"testmod/ids"
+)
+
+type MembershipKey struct {
+	TenantID ids.TenantID ` + "`" + `db:"tenant_id"` + "`" + `
+	Seq      int          ` + "`" + `db:"seq"` + "`" + `
+}
+
+type Membership struct {
+	drel.Model[MembershipKey]
+	Role string
+}
+`,
+	})
+	models, err := ScanPackages([]string{"./models"}, dir)
+	require.NoError(t, err)
+	var ms ModelInfo
+	for _, m := range models {
+		if m.Name == "Membership" {
+			ms = m
+		}
+	}
+	require.Len(t, ms.Key, 2)
+	assert.Equal(t, "testmod/ids", ms.Key[0].PkgPath,
+		"a key field from another package must record that package")
+	assert.Equal(t, "TenantID", ms.Key[0].GoType)
+	assert.Equal(t, "", ms.Key[1].PkgPath, "a builtin key field has no package")
+}
+
+func TestScan_KeyColumnsRecordTheirNormalizationKind(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type LineNo int
+type SKU string
+
+type EntryKey struct {
+	LineNo LineNo `+"`"+`db:"line_no"`+"`"+`
+	SKU    SKU    `+"`"+`db:"sku"`+"`"+`
+	Big    int64  `+"`"+`db:"big"`+"`"+`
+}
+
+type Entry struct {
+	drel.Model[EntryKey]
+	Note string
+}
+`)
+	var e ModelInfo
+	for _, m := range models {
+		if m.Name == "Entry" {
+			e = m
+		}
+	}
+	require.Len(t, e.Key, 3)
+	assert.Equal(t, "LineNo", e.Key[0].GoType)
+	assert.Equal(t, "int", e.Key[0].UnderlyingGoType)
+	assert.Equal(t, "SKU", e.Key[1].GoType)
+	assert.Equal(t, "string", e.Key[1].UnderlyingGoType)
+	assert.Equal(t, "int64", e.Key[2].GoType)
+	assert.Equal(t, "int", e.Key[2].UnderlyingGoType,
+		"every signed integer width normalizes through the same int rule")
+}
+
+func TestScan_ScalarNamedIntKeyRecordsItsKind(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type AccountID int
+
+type Account struct {
+	drel.Model[AccountID]
+	Name string
+}
+`)
+	require.Len(t, models, 1)
+	require.Len(t, models[0].Key, 1)
+	assert.Equal(t, "int", models[0].Key[0].UnderlyingGoType)
+}
+
+// A struct key takes its column names from the key struct's own field tags, so
+// a column name on the embedded drel.Model has nowhere to apply. Reject it
+// instead of ignoring it silently.
+func TestScan_StructKeyRejectsAColumnNameOnTheEmbeddedTag(t *testing.T) {
+	_, err := scanSourceErr(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type OrderLineKey struct {
+	OrderID int `+"`"+`db:"order_id"`+"`"+`
+	LineNo  int `+"`"+`db:"line_no"`+"`"+`
+}
+
+type OrderLine struct {
+	drel.Model[OrderLineKey] `+"`"+`db:"code"`+"`"+`
+	Qty int
+}
+`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OrderLine")
+	assert.Contains(t, err.Error(), `"code"`)
+	assert.Contains(t, err.Error(), "takes its column names from its own field tags")
+}
+
+// table= on the embedded tag describes the table, not the key, so it stays
+// valid alongside a struct key.
+func TestScan_StructKeyStillHonoursTableOnTheEmbeddedTag(t *testing.T) {
+	models := scanSource(t, `
+package m
+
+import "github.com/alternayte/drel"
+
+type OrderLineKey struct {
+	OrderID int `+"`"+`db:"order_id"`+"`"+`
+	LineNo  int `+"`"+`db:"line_no"`+"`"+`
+}
+
+type OrderLine struct {
+	drel.Model[OrderLineKey] `+"`"+`db:"table=ol"`+"`"+`
+	Qty int
+}
+`)
+	var ol ModelInfo
+	for _, m := range models {
+		if m.Name == "OrderLine" {
+			ol = m
+		}
+	}
+	assert.Equal(t, "ol", ol.TableName)
+	assert.Equal(t, []string{"order_id", "line_no"}, ol.PKColumns())
+}

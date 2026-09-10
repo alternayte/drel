@@ -15,6 +15,25 @@ minor versions may contain breaking changes.
   ignored; an ambiguous one is rejected.
 - An explicit table name, set by the `table=` option on the embedded
   `drel.Model` field's `db` tag.
+- Composite primary keys, declared as a comparable Go struct passed to
+  `drel.Model[K]`. Each exported field of the key struct becomes one key
+  column, named by its own `db` tag, defaulting to snake-case; field order is
+  the key order. A composite key is always application-assigned; auto-increment
+  applies only to a single integer key column. A composite-key model may declare
+  `belongs_to` only. It cannot be the target of a relationship, because a
+  multi-column foreign key is not emitted, and it cannot declare `has_many`,
+  `has_one`, or `many_to_many`, because the include loader matches a child
+  foreign key against one parent key value and a many-to-many pivot needs one
+  column per key field. Codegen rejects each of these at generation time.
+- A named primary key column, set by the first position of a `db` tag on the
+  embedded `drel.Model` field, for example `drel.Model[string] \`db:"code"\``.
+  A single `string` primary key is now documented; it has worked all along.
+  A named type over a scalar kind, such as `type AccountID int`, now gets a
+  column of its underlying kind instead of `text`. It is application-assigned,
+  so it never auto-increments. A `db` tag column name on the embedded
+  `drel.Model` field is rejected when the key is a struct; a composite key
+  takes its column names from the key struct's own field tags. The `table=`
+  option on that tag is unaffected.
 
 ### Fixed
 
@@ -32,6 +51,16 @@ minor versions may contain breaking changes.
   `internal/codegen`, not importable outside this module) now returns
   `(upSQL, downSQL string, err error)`. A rename marker can be ambiguous, and
   an ambiguous rename must fail rather than guess.
+- BREAKING: `ModelMeta.PKColumn string` is now `ModelMeta.PKColumns []string`,
+  and `ModelMetaBase` changed the same way. Codegen writes every use, so
+  regenerating repairs an application. A hand-written meta must be edited.
+- BREAKING: the six primary-key statement builders on `dialect.Dialect` now
+  take `pkColumns []string, pkValues []any` instead of a single column and
+  value. This affects custom dialects only.
+- The scalar primary key column now follows its `db` tag instead of the
+  literal `id`. A model with `db:"code"` on its embedded `drel.Model` field now
+  gets a DDL column named `code`, not `id`. For an existing table this is a DDL
+  change: a migration diff sees a rename or a drop-and-add, not a no-op.
 
 ## [0.7.1] - 2026-09-09
 

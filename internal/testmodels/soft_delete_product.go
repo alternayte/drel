@@ -43,7 +43,7 @@ var SoftDeleteProducts = struct {
 var SoftDeleteProductMeta = drel.ModelMeta[SoftDeleteProduct]{
 	Table:         "sd_products",
 	Columns:       []string{"id", "name", "price", "deleted_at", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	HasSoftDelete: true,
 	Filters: []drel.NamedFilter{
 		{Name: "soft_delete", Clause: ast.WhereClause{

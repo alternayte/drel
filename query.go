@@ -384,7 +384,7 @@ func (q *QueryBuilder[T]) Page(ctx context.Context) (*CursorPage[T], error) {
 		return nil, ErrInvalidPageSize
 	}
 	pageSize := *q.limit
-	order := cursorOrder(q.orderBy, q.meta.PKColumn)
+	order := cursorOrder(q.orderBy, q.meta.PKColumns)
 
 	backward := q.before != nil
 	queryOrder := order

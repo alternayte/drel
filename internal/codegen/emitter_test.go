@@ -17,6 +17,7 @@ func TestEmitModelFile_SimpleModel(t *testing.T) {
 		PkgName:   "models",
 		PKType:    "int",
 		TableName: "products",
+		Key:       []KeyColumn{{ColumnName: "id", GoType: "int"}},
 		Fields: []FieldInfo{
 			{Name: "name", GoType: "string", ColumnName: "name", LocalGoType: "string"},
 			{Name: "price", GoType: "int", ColumnName: "price", LocalGoType: "int"},
@@ -80,7 +81,7 @@ func TestEmitModelFile_SimpleModel(t *testing.T) {
 	assert.Contains(t, out, "var ProductMeta = drel.ModelMeta[Product]{")
 	assert.Contains(t, out, `Table:   "products"`)
 	assert.Contains(t, out, `Columns: []string{"id", "name", "price", "in_stock", "created_at", "updated_at"}`)
-	assert.Contains(t, out, `PKColumn: "id"`)
+	assert.Contains(t, out, `PKColumns: []string{"id"}`)
 	assert.Contains(t, out, "Scan:          scanProduct,")
 	assert.Contains(t, out, "Snapshot:      snapshotProduct,")
 	assert.Contains(t, out, "Diff:          diffProduct,")
@@ -782,10 +783,129 @@ func extractLine(s, substr string) string {
 // longer emitted for a model.
 func TestEmitTypedRepos_NoUoWRepository(t *testing.T) {
 	var b strings.Builder
-	emitTypedRepos(&b, ModelInfo{Name: "User", PKType: "int"})
+	emitTypedRepos(&b, ModelInfo{Name: "User", PKType: "int"}, nil)
 	out := b.String()
 
 	assert.Contains(t, out, "type UserRepository struct {")
 	assert.Contains(t, out, "type TxUserRepository struct {")
 	assert.NotContains(t, out, "UoW")
+}
+
+func TestEmit_CompositeKeyEmitsPKColumnsAndKeyValues(t *testing.T) {
+	m := ModelInfo{
+		Name:      "OrderLine",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	src := EmitModelFile(m)
+	assert.Contains(t, src, `PKColumns: []string{"order_id", "line_no"},`)
+	assert.Contains(t, src, "func orderlineKeyValues(key any) []any {")
+	assert.Contains(t, src, "k := key.(OrderLineKey)")
+	assert.Contains(t, src, "return []any{k.OrderID, k.LineNo}")
+	assert.Contains(t, src, "KeyValues:     orderlineKeyValues,")
+	assert.Contains(t, src, "KeyStrategy: drel.KeyAppAssigned,")
+	assert.NotContains(t, src, "GenerateKey:")
+	assert.Contains(t, src, "func orderlineKeyIsZero(p *OrderLine) bool {")
+	assert.Contains(t, src, "var zero OrderLineKey")
+	// Per-column normalization.
+	assert.Contains(t, src, "func orderlineNormalizeKey(v any) any {")
+	assert.Contains(t, src, "vals, ok := v.([]any)")
+	assert.Contains(t, src, "if len(vals) != 2 {")
+	assert.Contains(t, src, "drel.NormalizeIntKey(vals[0]).(int)")
+	assert.Contains(t, src, "drel.NormalizeIntKey(vals[1]).(int)")
+	_, perr := parser.ParseFile(token.NewFileSet(), "order_line_drel.go", src, parser.AllErrors)
+	require.NoError(t, perr)
+}
+
+func TestEmit_ScalarKeyEmitsANilKeyValues(t *testing.T) {
+	m := ModelInfo{
+		Name:      "User",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "users",
+		PKType:    "int",
+		Key:       []KeyColumn{{ColumnName: "id", GoType: "int"}},
+	}
+	src := EmitModelFile(m)
+	assert.Contains(t, src, `PKColumns: []string{"id"},`)
+	assert.NotContains(t, src, "KeyValues:")
+	assert.NotContains(t, src, "KeyValues(", "a scalar key emits no splitter function either")
+	assert.NotContains(t, src, "vals, ok := v.([]any)")
+}
+
+func TestEmit_CompositeKeyWithUUIDColumnImportsUUID(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Membership",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "memberships",
+		PKType:    "MembershipKey",
+		Key: []KeyColumn{
+			{FieldName: "TenantID", ColumnName: "tenant_id", GoType: "UUID", PkgPath: "github.com/google/uuid"},
+			{FieldName: "Seq", ColumnName: "seq", GoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	src := EmitModelFile(m)
+	assert.Contains(t, src, `uuid "github.com/google/uuid"`,
+		"a uuid key column must pull in its own import")
+	assert.Contains(t, src, "drel.NormalizeUUIDKey(vals[0]).(uuid.UUID)",
+		"the assertion must use the aliased, package-qualified type")
+	assert.Contains(t, src, "drel.NormalizeIntKey(vals[1]).(int)")
+	_, perr := parser.ParseFile(token.NewFileSet(), "membership_drel.go", src, parser.AllErrors)
+	require.NoError(t, perr)
+}
+
+func TestEmit_CompositeKeyWithNamedFieldTypesConvertsRatherThanAsserts(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Entry",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "entries",
+		PKType:    "EntryKey",
+		Key: []KeyColumn{
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "LineNo", UnderlyingGoType: "int"},
+			{FieldName: "SKU", ColumnName: "sku", GoType: "SKU", UnderlyingGoType: "string"},
+			{FieldName: "Big", ColumnName: "big", GoType: "int64", UnderlyingGoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	src := EmitModelFile(m)
+	// The helper returns a Go int, so the assertion must be to int and the
+	// named type reached by conversion.
+	assert.Contains(t, src, "f0, ok := drel.NormalizeIntKey(vals[0]).(int)")
+	assert.Contains(t, src, "k.LineNo = LineNo(f0)")
+	assert.Contains(t, src, "f1, ok := vals[1].(string)")
+	assert.Contains(t, src, "k.SKU = SKU(f1)")
+	assert.Contains(t, src, "f2, ok := drel.NormalizeIntKey(vals[2]).(int)")
+	assert.Contains(t, src, "k.Big = int64(f2)")
+	assert.NotContains(t, src, ".(LineNo)")
+	assert.NotContains(t, src, ".(SKU)")
+	_, perr := parser.ParseFile(token.NewFileSet(), "entry_drel.go", src, parser.AllErrors)
+	require.NoError(t, perr)
+}
+
+func TestEmit_ScalarNamedIntKeyIsConvertedBack(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Account",
+		PkgPath:   "testmod/models",
+		PkgName:   "models",
+		TableName: "accounts",
+		PKType:    "AccountID",
+		Key:       []KeyColumn{{ColumnName: "id", GoType: "AccountID", UnderlyingGoType: "int"}},
+	}
+	src := EmitModelFile(m)
+	assert.Contains(t, src, "drel.NormalizeIntKey(v).(int)",
+		"a named int PK must still take the integer rule")
+	assert.Contains(t, src, "return AccountID(")
+	assert.NotContains(t, src, "\treturn v\n}")
+	_, perr := parser.ParseFile(token.NewFileSet(), "account_drel.go", src, parser.AllErrors)
+	require.NoError(t, perr)
 }

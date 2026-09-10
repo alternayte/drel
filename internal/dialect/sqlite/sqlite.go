@@ -423,7 +423,17 @@ func (s *SQLite) BuildInsert(table string, columns []string, values []any, retur
 	return dialect.Result{SQL: b.String(), Args: values}
 }
 
-func (s *SQLite) BuildUpdate(table string, changes []dialect.ColumnValue, pkColumn string, pkValue any) dialect.Result {
+// pkWhere renders an AND-joined equality clause over the primary key columns.
+// A one-column key renders exactly as the old single-column code rendered it.
+func pkWhere(pkColumns []string) string {
+	parts := make([]string, len(pkColumns))
+	for i, c := range pkColumns {
+		parts[i] = fmt.Sprintf("%s = ?", quoteIdent(c))
+	}
+	return strings.Join(parts, " AND ")
+}
+
+func (s *SQLite) BuildUpdate(table string, changes []dialect.ColumnValue, pkColumns []string, pkValues []any) dialect.Result {
 	changes = dedupLastWins(changes)
 	var b strings.Builder
 	var args []any
@@ -441,53 +451,56 @@ func (s *SQLite) BuildUpdate(table string, changes []dialect.ColumnValue, pkColu
 			args = append(args, cv.Value)
 		}
 	}
-	b.WriteString(fmt.Sprintf(" WHERE %s = ?", quoteIdent(pkColumn)))
-	args = append(args, pkValue)
+	b.WriteString(" WHERE ")
+	b.WriteString(pkWhere(pkColumns))
+	args = append(args, pkValues...)
 	return dialect.Result{SQL: b.String(), Args: args}
 }
 
-func (s *SQLite) BuildDelete(table string, pkColumn string, pkValue any) dialect.Result {
-	sql := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quoteIdent(table), quoteIdent(pkColumn))
-	return dialect.Result{SQL: sql, Args: []any{pkValue}}
+func (s *SQLite) BuildDelete(table string, pkColumns []string, pkValues []any) dialect.Result {
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s", quoteIdent(table), pkWhere(pkColumns))
+	return dialect.Result{SQL: sql, Args: append([]any(nil), pkValues...)}
 }
 
-func (s *SQLite) BuildSoftDelete(table string, pkColumn string, pkValue any) dialect.Result {
+func (s *SQLite) BuildSoftDelete(table string, pkColumns []string, pkValues []any) dialect.Result {
 	sql := fmt.Sprintf(
-		"UPDATE %s SET %s = CURRENT_TIMESTAMP WHERE %s = ?",
-		quoteIdent(table), quoteIdent("deleted_at"), quoteIdent(pkColumn),
+		"UPDATE %s SET %s = CURRENT_TIMESTAMP WHERE %s",
+		quoteIdent(table), quoteIdent("deleted_at"), pkWhere(pkColumns),
 	)
-	return dialect.Result{SQL: sql, Args: []any{pkValue}}
+	return dialect.Result{SQL: sql, Args: append([]any(nil), pkValues...)}
 }
 
 // BuildDeleteVersioned generates a versioned DELETE for SQLite. SQLite 3.35+
 // supports RETURNING; the primary key is returned so the mutation layer can
 // detect a concurrency conflict via no-rows (mirroring Postgres).
-func (s *SQLite) BuildDeleteVersioned(table string, pkColumn string, pkValue any, versionCol string, currentVersion int) dialect.Result {
+func (s *SQLite) BuildDeleteVersioned(table string, pkColumns []string, pkValues []any, versionCol string, currentVersion int) dialect.Result {
 	sql := fmt.Sprintf(
-		"DELETE FROM %s WHERE %s = ? AND %s = ? RETURNING %s",
-		quoteIdent(table), quoteIdent(pkColumn), quoteIdent(versionCol), quoteIdent(pkColumn),
+		"DELETE FROM %s WHERE %s AND %s = ? RETURNING %s",
+		quoteIdent(table), pkWhere(pkColumns), quoteIdent(versionCol), quoteIdent(pkColumns[0]),
 	)
-	return dialect.Result{SQL: sql, Args: []any{pkValue, currentVersion}}
+	args := append(append([]any(nil), pkValues...), currentVersion)
+	return dialect.Result{SQL: sql, Args: args}
 }
 
 // BuildSoftDeleteVersioned generates a versioned soft-delete for SQLite.
 // SQLite 3.35+ supports RETURNING; the primary key is returned so the mutation
 // layer can detect a concurrency conflict via no-rows (mirroring Postgres).
-func (s *SQLite) BuildSoftDeleteVersioned(table string, pkColumn string, pkValue any, versionCol string, currentVersion int) dialect.Result {
+func (s *SQLite) BuildSoftDeleteVersioned(table string, pkColumns []string, pkValues []any, versionCol string, currentVersion int) dialect.Result {
 	sql := fmt.Sprintf(
-		"UPDATE %s SET %s = CURRENT_TIMESTAMP, %s = %s + 1 WHERE %s = ? AND %s = ? RETURNING %s",
+		"UPDATE %s SET %s = CURRENT_TIMESTAMP, %s = %s + 1 WHERE %s AND %s = ? RETURNING %s",
 		quoteIdent(table), quoteIdent("deleted_at"),
 		quoteIdent(versionCol), quoteIdent(versionCol),
-		quoteIdent(pkColumn), quoteIdent(versionCol),
-		quoteIdent(pkColumn),
+		pkWhere(pkColumns), quoteIdent(versionCol),
+		quoteIdent(pkColumns[0]),
 	)
-	return dialect.Result{SQL: sql, Args: []any{pkValue, currentVersion}}
+	args := append(append([]any(nil), pkValues...), currentVersion)
+	return dialect.Result{SQL: sql, Args: args}
 }
 
 // BuildUpdateVersioned generates a versioned UPDATE for SQLite. SQLite 3.35+
 // supports RETURNING, so the new version is returned and read back by the
 // mutation layer (mirroring Postgres).
-func (s *SQLite) BuildUpdateVersioned(table string, changes []dialect.ColumnValue, pkColumn string, pkValue any, versionCol string, currentVersion int) dialect.Result {
+func (s *SQLite) BuildUpdateVersioned(table string, changes []dialect.ColumnValue, pkColumns []string, pkValues []any, versionCol string, currentVersion int) dialect.Result {
 	changes = dedupLastWins(changes)
 	var b strings.Builder
 	var args []any
@@ -510,8 +523,9 @@ func (s *SQLite) BuildUpdateVersioned(table string, changes []dialect.ColumnValu
 
 	b.WriteString(fmt.Sprintf(", %s = %s + 1", quoteIdent(versionCol), quoteIdent(versionCol)))
 
-	b.WriteString(fmt.Sprintf(" WHERE %s = ?", quoteIdent(pkColumn)))
-	args = append(args, pkValue)
+	b.WriteString(" WHERE ")
+	b.WriteString(pkWhere(pkColumns))
+	args = append(args, pkValues...)
 
 	b.WriteString(fmt.Sprintf(" AND %s = ?", quoteIdent(versionCol)))
 	args = append(args, currentVersion)

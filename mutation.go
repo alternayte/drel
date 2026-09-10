@@ -52,11 +52,14 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 			}
 			// Include the (already-stamped) PK in the INSERT and read back only
 			// the DB-generated timestamps — never the id.
-			cols = append([]string{te.meta.PKColumn}, cols...)
-			vals = append([]any{te.meta.PKValue(te.entity)}, vals...)
+			insertPKCols := te.meta.PKColumns
+			insertPKVals := keyValuesOf(te.meta.KeyValues, te.meta.PKValue(te.entity))
+			cols = append(append([]string(nil), insertPKCols...), cols...)
+			vals = append(append([]any(nil), insertPKVals...), vals...)
 		}
 
-		returning := []string{"id", "created_at", "updated_at"}
+		pkCols := te.meta.PKColumns
+		returning := append(append([]string(nil), pkCols...), "created_at", "updated_at")
 		scan := te.meta.ScanReturning
 		if appAssigned {
 			returning = []string{"created_at", "updated_at"}
@@ -122,11 +125,13 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 			}
 			cvs[i] = dialect.ColumnValue{Column: c.Column, Value: val}
 		}
+		pkCols := te.meta.PKColumns
 		pkVal := te.meta.PKValue(te.entity)
+		pkVals := keyValuesOf(te.meta.KeyValues, pkVal)
 
 		if te.meta.HasVersioned && te.meta.VersionValue != nil {
 			currentVersion := te.meta.VersionValue(te.entity)
-			result := d.BuildUpdateVersioned(te.meta.Table, cvs, te.meta.PKColumn, pkVal, "version", currentVersion)
+			result := d.BuildUpdateVersioned(te.meta.Table, cvs, pkCols, pkVals, "version", currentVersion)
 
 			// UPDATE ... RETURNING version (both dialects support RETURNING).
 			row := exec.queryRowInternal(ctx, result.SQL, result.Args...)
@@ -139,7 +144,7 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 			}
 			te.meta.SetVersion(te.entity, newVersion)
 		} else {
-			result := d.BuildUpdate(te.meta.Table, cvs, te.meta.PKColumn, pkVal)
+			result := d.BuildUpdate(te.meta.Table, cvs, pkCols, pkVals)
 			affected, err := exec.execInternal(ctx, result.SQL, result.Args...)
 			if err != nil {
 				return nil, fmt.Errorf("drel: update %s: %w", te.meta.Table, err)
@@ -151,18 +156,20 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 	}
 
 	for _, te := range pc.Deleted {
+		pkCols := te.meta.PKColumns
 		pkVal := te.meta.PKValue(te.entity)
+		pkVals := keyValuesOf(te.meta.KeyValues, pkVal)
 		versioned := te.meta.HasVersioned && te.meta.VersionValue != nil
 
 		if te.meta.HasSoftDelete && !te.hardDelete {
 			if versioned {
 				currentVersion := te.meta.VersionValue(te.entity)
-				result := d.BuildSoftDeleteVersioned(te.meta.Table, te.meta.PKColumn, pkVal, "version", currentVersion)
+				result := d.BuildSoftDeleteVersioned(te.meta.Table, pkCols, pkVals, "version", currentVersion)
 				if err := execVersionedDelete(ctx, exec, d, te, result, currentVersion); err != nil {
 					return nil, err
 				}
 			} else {
-				result := d.BuildSoftDelete(te.meta.Table, te.meta.PKColumn, pkVal)
+				result := d.BuildSoftDelete(te.meta.Table, pkCols, pkVals)
 				if _, err := exec.execInternal(ctx, result.SQL, result.Args...); err != nil {
 					return nil, fmt.Errorf("drel: soft delete %s: %w", te.meta.Table, err)
 				}
@@ -170,12 +177,12 @@ func applyPendingChanges(ctx context.Context, exec txExec, d dialect.Dialect, tr
 		} else {
 			if versioned {
 				currentVersion := te.meta.VersionValue(te.entity)
-				result := d.BuildDeleteVersioned(te.meta.Table, te.meta.PKColumn, pkVal, "version", currentVersion)
+				result := d.BuildDeleteVersioned(te.meta.Table, pkCols, pkVals, "version", currentVersion)
 				if err := execVersionedDelete(ctx, exec, d, te, result, currentVersion); err != nil {
 					return nil, err
 				}
 			} else {
-				result := d.BuildDelete(te.meta.Table, te.meta.PKColumn, pkVal)
+				result := d.BuildDelete(te.meta.Table, pkCols, pkVals)
 				if _, err := exec.execInternal(ctx, result.SQL, result.Args...); err != nil {
 					return nil, fmt.Errorf("drel: delete %s: %w", te.meta.Table, err)
 				}

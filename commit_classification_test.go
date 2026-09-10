@@ -74,8 +74,8 @@ type commitModel struct{ Name string }
 
 func minimalMeta() ModelMeta[commitModel] {
 	return ModelMeta[commitModel]{
-		Table:    "t",
-		PKColumn: "id",
+		Table:     "t",
+		PKColumns: []string{"id"},
 		InsertColumns: func(p *commitModel) ([]string, []any) {
 			return []string{"name"}, []any{p.Name}
 		},

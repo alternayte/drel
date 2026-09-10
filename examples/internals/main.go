@@ -43,9 +43,9 @@ type Product struct {
 // ProductMeta is what codegen emits as a package-level var.
 // It tells Repository how to scan rows, track changes, and build inserts.
 var ProductMeta = drel.ModelMeta[Product]{
-	Table:    "products",
-	Columns:  []string{"id", "name", "price", "in_stock", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "products",
+	Columns:   []string{"id", "name", "price", "in_stock", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 
 	Scan: func(row drel.Row) (*Product, error) {
 		p := &Product{}

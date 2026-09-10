@@ -7,7 +7,7 @@ type ksModel struct{ Model[string] }
 func TestToMetaBase_CarriesKeyFields(t *testing.T) {
 	meta := ModelMeta[ksModel]{
 		Table:       "ks_models",
-		PKColumn:    "id",
+		PKColumns:   []string{"id"},
 		KeyStrategy: KeyAppAssigned,
 		GenerateKey: func() any { return "generated" },
 		SetKey:      func(p *ksModel, key any) { p.SetID(key.(string)) },

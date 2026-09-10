@@ -32,9 +32,9 @@ type niReview struct {
 
 func niAuthorMeta() drel.ModelMeta[niAuthor] {
 	return drel.ModelMeta[niAuthor]{
-		Table:    "ni_authors",
-		Columns:  []string{"id", "name"},
-		PKColumn: "id",
+		Table:     "ni_authors",
+		Columns:   []string{"id", "name"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*niAuthor, error) {
 			a := &niAuthor{}
 			return a, r.Scan(&a.ID, &a.Name)
@@ -46,9 +46,9 @@ func niAuthorMeta() drel.ModelMeta[niAuthor] {
 
 func niBookMeta() drel.ModelMeta[niBook] {
 	return drel.ModelMeta[niBook]{
-		Table:    "ni_books",
-		Columns:  []string{"id", "author_id", "title"},
-		PKColumn: "id",
+		Table:     "ni_books",
+		Columns:   []string{"id", "author_id", "title"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*niBook, error) {
 			b := &niBook{}
 			return b, r.Scan(&b.ID, &b.AuthorID, &b.Title)
@@ -60,9 +60,9 @@ func niBookMeta() drel.ModelMeta[niBook] {
 
 func niReviewMeta() drel.ModelMeta[niReview] {
 	return drel.ModelMeta[niReview]{
-		Table:    "ni_reviews",
-		Columns:  []string{"id", "book_id", "stars"},
-		PKColumn: "id",
+		Table:     "ni_reviews",
+		Columns:   []string{"id", "book_id", "stars"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*niReview, error) {
 			rv := &niReview{}
 			return rv, r.Scan(&rv.ID, &rv.BookID, &rv.Stars)
@@ -154,9 +154,9 @@ type miTag struct {
 
 func miAuthorMeta() drel.ModelMeta[miAuthor] {
 	return drel.ModelMeta[miAuthor]{
-		Table:    "mi_authors",
-		Columns:  []string{"id", "name"},
-		PKColumn: "id",
+		Table:     "mi_authors",
+		Columns:   []string{"id", "name"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*miAuthor, error) {
 			a := &miAuthor{}
 			return a, r.Scan(&a.ID, &a.Name)
@@ -168,9 +168,9 @@ func miAuthorMeta() drel.ModelMeta[miAuthor] {
 
 func miTagMeta() drel.ModelMeta[miTag] {
 	return drel.ModelMeta[miTag]{
-		Table:    "mi_tags",
-		Columns:  []string{"id", "label"},
-		PKColumn: "id",
+		Table:     "mi_tags",
+		Columns:   []string{"id", "label"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*miTag, error) {
 			tg := &miTag{}
 			return tg, r.Scan(&tg.ID, &tg.Label)

@@ -86,7 +86,7 @@ func TestErrorClassification_FlushPath(t *testing.T) {
 	require.NoError(t, err)
 
 	meta := drel.ModelMeta[uniqItem]{
-		Table: "uniq_items", Columns: []string{"id", "name", "created_at", "updated_at"}, PKColumn: "id",
+		Table: "uniq_items", Columns: []string{"id", "name", "created_at", "updated_at"}, PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*uniqItem, error) {
 			it := &uniqItem{}
 			return it, r.Scan(&it.ID, &it.Name, &it.CreatedAt, &it.UpdatedAt)

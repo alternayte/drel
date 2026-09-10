@@ -18,9 +18,9 @@ type testSnapshot struct {
 }
 
 var testMeta = &ModelMetaBase{
-	Table:    "test_entities",
-	Columns:  []string{"id", "name", "age"},
-	PKColumn: "id",
+	Table:     "test_entities",
+	Columns:   []string{"id", "name", "age"},
+	PKColumns: []string{"id"},
 	Snapshot: func(entity any) any {
 		e := entity.(*testEntity)
 		return testSnapshot{Name: e.Name, Age: e.Age}
@@ -181,9 +181,9 @@ type pkSnapshot struct {
 }
 
 var pkMeta = &ModelMetaBase{
-	Table:    "pk_entities",
-	Columns:  []string{"id", "name"},
-	PKColumn: "id",
+	Table:     "pk_entities",
+	Columns:   []string{"id", "name"},
+	PKColumns: []string{"id"},
 	Snapshot: func(entity any) any {
 		e := entity.(*pkEntity)
 		return pkSnapshot{Name: e.Name}

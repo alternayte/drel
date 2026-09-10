@@ -23,9 +23,9 @@ type eventUserSnapshot struct {
 }
 
 var EventUserMeta = drel.ModelMeta[EventUser]{
-	Table:    "event_users",
-	Columns:  []string{"id", "name", "email", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "event_users",
+	Columns:   []string{"id", "name", "email", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*EventUser, error) {
 		u := &EventUser{}
 		idPtr, createdAtPtr, updatedAtPtr := u.ScanPtrs()

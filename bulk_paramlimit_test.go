@@ -28,9 +28,9 @@ func wideRowMeta() drel.ModelMeta[wideRow] {
 	}
 	insertCols := cols[1:]
 	return drel.ModelMeta[wideRow]{
-		Table:    "wide",
-		Columns:  cols,
-		PKColumn: "id",
+		Table:     "wide",
+		Columns:   cols,
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*wideRow, error) {
 			w := &wideRow{}
 			dest := make([]any, 0, wideCols+1)

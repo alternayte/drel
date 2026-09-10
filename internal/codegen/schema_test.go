@@ -659,3 +659,171 @@ func columnsByName(cols []Column) map[string]Column {
 	}
 	return m
 }
+
+func TestGenerateCreateTable_CompositeKeyPostgres(t *testing.T) {
+	m := ModelInfo{
+		Name:      "OrderLine",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int"},
+		},
+		KeyIsStruct: true,
+		Fields:      []FieldInfo{{Name: "Qty", GoType: "int", ColumnName: "qty", IsExported: true}},
+	}
+	sql := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, sql, `"order_id" integer NOT NULL`)
+	assert.Contains(t, sql, `"line_no" integer NOT NULL`)
+	assert.Contains(t, sql, `PRIMARY KEY ("order_id", "line_no")`)
+	assert.NotContains(t, sql, "SERIAL")
+}
+
+func TestGenerateCreateTable_CompositeKeySQLite(t *testing.T) {
+	m := ModelInfo{
+		Name:      "OrderLine",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	sql := GenerateCreateTable(m, nil, "sqlite")
+	assert.Contains(t, sql, `PRIMARY KEY ("order_id", "line_no")`)
+	assert.NotContains(t, sql, "AUTOINCREMENT")
+}
+
+func TestGenerateCreateTable_NamedScalarKeyUsesTheTaggedColumnName(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Country",
+		TableName: "countries",
+		PKType:    "string",
+		Key:       []KeyColumn{{ColumnName: "code", GoType: "string"}},
+	}
+	sql := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, sql, `"code" text PRIMARY KEY`)
+}
+
+func TestGenerateCreateTable_CompositeKeyUUIDColumnPostgres(t *testing.T) {
+	m := ModelInfo{
+		Name:      "TenantResource",
+		TableName: "tenant_resources",
+		PKType:    "TenantResourceKey",
+		Key: []KeyColumn{
+			{FieldName: "TenantID", ColumnName: "tenant_id", GoType: "UUID", UnderlyingGoType: "uuid.UUID"},
+			{FieldName: "ResourceNo", ColumnName: "resource_no", GoType: "int", UnderlyingGoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	sql := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, sql, `"tenant_id" uuid NOT NULL`)
+	assert.NotContains(t, sql, `"tenant_id" text`)
+}
+
+func TestGenerateCreateTable_CompositeKeyUUIDColumnSQLite(t *testing.T) {
+	m := ModelInfo{
+		Name:      "TenantResource",
+		TableName: "tenant_resources",
+		PKType:    "TenantResourceKey",
+		Key: []KeyColumn{
+			{FieldName: "TenantID", ColumnName: "tenant_id", GoType: "UUID", UnderlyingGoType: "uuid.UUID"},
+			{FieldName: "ResourceNo", ColumnName: "resource_no", GoType: "int", UnderlyingGoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	sql := GenerateCreateTable(m, nil, "sqlite")
+	assert.Contains(t, sql, `"tenant_id" TEXT NOT NULL`)
+}
+
+func TestGenerateCreateTable_CompositeKeyNamedIntColumnPostgres(t *testing.T) {
+	m := ModelInfo{
+		Name:      "OrderLine",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "OrderID", UnderlyingGoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int", UnderlyingGoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	sql := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, sql, `"order_id" integer NOT NULL`)
+	assert.NotContains(t, sql, `"order_id" text`)
+}
+
+func TestGenerateCreateTable_CompositeKeyNamedIntColumnSQLite(t *testing.T) {
+	m := ModelInfo{
+		Name:      "OrderLine",
+		TableName: "order_lines",
+		PKType:    "OrderLineKey",
+		Key: []KeyColumn{
+			{FieldName: "OrderID", ColumnName: "order_id", GoType: "OrderID", UnderlyingGoType: "int"},
+			{FieldName: "LineNo", ColumnName: "line_no", GoType: "int", UnderlyingGoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	sql := GenerateCreateTable(m, nil, "sqlite")
+	assert.Contains(t, sql, `"order_id" INTEGER NOT NULL`)
+	assert.NotContains(t, sql, `"order_id" TEXT`)
+}
+
+func TestGenerateCreateTable_SingleFieldStructKeyIntPostgres(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Account",
+		TableName: "accounts",
+		PKType:    "AccountKey",
+		Key: []KeyColumn{
+			{FieldName: "AccountID", ColumnName: "account_id", GoType: "int", UnderlyingGoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	sql := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, sql, `"account_id" integer PRIMARY KEY`)
+	assert.NotContains(t, sql, "SERIAL")
+}
+
+func TestGenerateCreateTable_SingleFieldStructKeyIntSQLite(t *testing.T) {
+	m := ModelInfo{
+		Name:      "Account",
+		TableName: "accounts",
+		PKType:    "AccountKey",
+		Key: []KeyColumn{
+			{FieldName: "AccountID", ColumnName: "account_id", GoType: "int", UnderlyingGoType: "int"},
+		},
+		KeyIsStruct: true,
+	}
+	sql := GenerateCreateTable(m, nil, "sqlite")
+	assert.Contains(t, sql, `"account_id" INTEGER PRIMARY KEY`)
+	assert.NotContains(t, sql, "AUTOINCREMENT")
+}
+
+// A named scalar key type (type AccountID int) must take its SQL type from the
+// key column's underlying kind, not from the local type name, which
+// GoTypeToSQL does not recognize and would map to text. It is
+// application-assigned (isAppAssignedPK is true for any non-builtin name), so
+// it must never auto-increment.
+func TestGenerateCreateTable_NamedScalarIntPK(t *testing.T) {
+	m := ModelInfo{Name: "Account", PKType: "AccountID", TableName: "accounts",
+		Key:    []KeyColumn{{ColumnName: "id", GoType: "AccountID", UnderlyingGoType: "int"}},
+		Fields: []FieldInfo{{Name: "name", GoType: "string", ColumnName: "name"}}}
+
+	pg := GenerateCreateTable(m, nil, "postgres")
+	assert.Contains(t, pg, `"id" integer PRIMARY KEY`)
+	assert.NotContains(t, pg, "SERIAL")
+	assert.NotContains(t, pg, `"id" text`)
+
+	lite := GenerateCreateTable(m, nil, "sqlite")
+	assert.Contains(t, lite, `"id" INTEGER PRIMARY KEY`)
+	assert.NotContains(t, lite, "AUTOINCREMENT")
+	assert.NotContains(t, lite, `"id" TEXT`)
+}
+
+// A named scalar key type over string keeps a text column.
+func TestGenerateCreateTable_NamedScalarStringPK(t *testing.T) {
+	m := ModelInfo{Name: "Country", PKType: "CountryCode", TableName: "countries",
+		Key:    []KeyColumn{{ColumnName: "code", GoType: "CountryCode", UnderlyingGoType: "string"}},
+		Fields: []FieldInfo{{Name: "name", GoType: "string", ColumnName: "name"}}}
+	assert.Contains(t, GenerateCreateTable(m, nil, "postgres"), `"code" text PRIMARY KEY`)
+}

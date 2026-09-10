@@ -49,12 +49,16 @@ type Dialect interface {
 	Explain(query string) (string, bool)
 	BuildSelect(node ast.SelectNode) Result
 	BuildInsert(table string, columns []string, values []any, returningCols []string) Result
-	BuildUpdate(table string, changes []ColumnValue, pkColumn string, pkValue any) Result
-	BuildDelete(table string, pkColumn string, pkValue any) Result
-	BuildSoftDelete(table string, pkColumn string, pkValue any) Result
-	BuildUpdateVersioned(table string, changes []ColumnValue, pkColumn string, pkValue any, versionCol string, currentVersion int) Result
-	BuildDeleteVersioned(table string, pkColumn string, pkValue any, versionCol string, currentVersion int) Result
-	BuildSoftDeleteVersioned(table string, pkColumn string, pkValue any, versionCol string, currentVersion int) Result
+	// The six statement builders below take the primary key as parallel slices:
+	// pkColumns names every key column in key order, and pkValues holds one
+	// value per column in the same order. A one-column key produces exactly the
+	// SQL drel emitted before composite keys existed.
+	BuildUpdate(table string, changes []ColumnValue, pkColumns []string, pkValues []any) Result
+	BuildDelete(table string, pkColumns []string, pkValues []any) Result
+	BuildSoftDelete(table string, pkColumns []string, pkValues []any) Result
+	BuildUpdateVersioned(table string, changes []ColumnValue, pkColumns []string, pkValues []any, versionCol string, currentVersion int) Result
+	BuildDeleteVersioned(table string, pkColumns []string, pkValues []any, versionCol string, currentVersion int) Result
+	BuildSoftDeleteVersioned(table string, pkColumns []string, pkValues []any, versionCol string, currentVersion int) Result
 	BuildBulkInsert(table string, columns []string, rows [][]any) Result
 	BuildBulkUpdate(table string, sets []ColumnValue, where *ast.WhereClause) Result
 	BuildBulkDelete(table string, where *ast.WhereClause) Result

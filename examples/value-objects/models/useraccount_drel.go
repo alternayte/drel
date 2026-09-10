@@ -90,7 +90,7 @@ func useraccountNormalizeKey(v any) any {
 var UserAccountMeta = drel.ModelMeta[UserAccount]{
 	Table:         "user_accounts",
 	Columns:       []string{"id", "email", "balance", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanUseraccount,
 	Snapshot:      snapshotUseraccount,
 	Diff:          diffUseraccount,

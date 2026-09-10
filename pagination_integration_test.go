@@ -85,9 +85,9 @@ type nullRankRowPG struct {
 }
 
 var nullRankPGMeta = drel.ModelMeta[nullRankRowPG]{
-	Table:    "null_rank_pg",
-	Columns:  []string{"id", "rank"},
-	PKColumn: "id",
+	Table:     "null_rank_pg",
+	Columns:   []string{"id", "rank"},
+	PKColumns: []string{"id"},
 	Scan: func(r drel.Row) (*nullRankRowPG, error) {
 		x := &nullRankRowPG{}
 		return x, r.Scan(&x.ID, &x.Rank)

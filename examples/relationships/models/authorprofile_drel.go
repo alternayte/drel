@@ -89,7 +89,7 @@ func authorprofileNormalizeKey(v any) any {
 var AuthorProfileMeta = drel.ModelMeta[AuthorProfile]{
 	Table:         "author_profiles",
 	Columns:       []string{"id", "bio", "author_id", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanAuthorprofile,
 	Snapshot:      snapshotAuthorprofile,
 	Diff:          diffAuthorprofile,

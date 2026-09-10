@@ -25,9 +25,9 @@ type uiTag struct {
 
 func uiUserMeta() drel.ModelMeta[uiUser] {
 	return drel.ModelMeta[uiUser]{
-		Table:    "ui_users",
-		Columns:  []string{"id", "name"},
-		PKColumn: "id",
+		Table:     "ui_users",
+		Columns:   []string{"id", "name"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*uiUser, error) {
 			u := &uiUser{}
 			return u, r.Scan(&u.ID, &u.Name)
@@ -40,9 +40,9 @@ func uiUserMeta() drel.ModelMeta[uiUser] {
 
 func uiTagMeta() drel.ModelMeta[uiTag] {
 	return drel.ModelMeta[uiTag]{
-		Table:    "ui_tags",
-		Columns:  []string{"id", "label"},
-		PKColumn: "id",
+		Table:     "ui_tags",
+		Columns:   []string{"id", "label"},
+		PKColumns: []string{"id"},
 		Scan: func(r drel.Row) (*uiTag, error) {
 			tg := &uiTag{}
 			return tg, r.Scan(&tg.ID, &tg.Label)

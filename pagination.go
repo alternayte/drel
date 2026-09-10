@@ -220,18 +220,25 @@ func keysetStrictTerm(o ast.OrderByExpr, v any) (term ast.WhereClause, ok bool, 
 	}
 }
 
-// cursorOrder returns the effective ordering for cursor pagination: the builder's
-// OrderBy with the primary key appended as a final tiebreaker if not already
-// present, guaranteeing a total order so the keyset never skips or repeats rows.
-func cursorOrder(orderBy []ast.OrderByExpr, pkColumn string) []ast.OrderByExpr {
-	for _, o := range orderBy {
-		if o.Column == pkColumn {
-			return orderBy
+// cursorOrder returns the ordering used for keyset pagination: the caller's
+// ORDER BY, followed by every primary key column that is not already ordered.
+// The key columns make the ordering total, so a cursor never skips or repeats
+// a row when the caller's ordering has ties.
+func cursorOrder(orderBy []ast.OrderByExpr, pkColumns []string) []ast.OrderByExpr {
+	out := append([]ast.OrderByExpr(nil), orderBy...)
+	for _, pk := range pkColumns {
+		seen := false
+		for _, o := range out {
+			if o.Column == pk {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, ast.OrderByExpr{Column: pk, Direction: ast.Asc})
 		}
 	}
-	out := make([]ast.OrderByExpr, len(orderBy), len(orderBy)+1)
-	copy(out, orderBy)
-	return append(out, ast.OrderByExpr{Column: pkColumn, Direction: ast.Asc})
+	return out
 }
 
 // buildOffsetPage assembles an OffsetPage from a fetched slice and the total count.

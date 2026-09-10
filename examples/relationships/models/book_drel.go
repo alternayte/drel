@@ -89,7 +89,7 @@ func bookNormalizeKey(v any) any {
 var BookMeta = drel.ModelMeta[Book]{
 	Table:         "books",
 	Columns:       []string{"id", "title", "author_id", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanBook,
 	Snapshot:      snapshotBook,
 	Diff:          diffBook,

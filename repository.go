@@ -2,15 +2,18 @@ package drel
 
 import (
 	"context"
-
-	"github.com/alternayte/drel/internal/ast"
 )
 
 // ModelMeta describes the database mapping for a model type T.
 type ModelMeta[T any] struct {
-	Table         string
-	Columns       []string
-	PKColumn      string
+	Table   string
+	Columns []string
+	// PKColumns lists every primary key column, in key order. Generated code
+	// always sets it.
+	PKColumns []string
+	// KeyValues splits a primary key value into one value per PKColumns entry,
+	// in the same order. When nil the key is a single value.
+	KeyValues     func(key any) []any
 	Scan          func(Row) (*T, error)
 	Snapshot      func(*T) any
 	Diff          func(*T, any) []FieldChange
@@ -41,9 +44,10 @@ type ModelMeta[T any] struct {
 // ToMetaBase converts a typed ModelMeta[T] to a type-erased ModelMetaBase.
 func ToMetaBase[T any](meta *ModelMeta[T]) *ModelMetaBase {
 	base := &ModelMetaBase{
-		Table:    meta.Table,
-		Columns:  meta.Columns,
-		PKColumn: meta.PKColumn,
+		Table:     meta.Table,
+		Columns:   meta.Columns,
+		PKColumns: meta.PKColumns,
+		KeyValues: meta.KeyValues,
 		PKValue: func(entity any) any {
 			return meta.PKValue(entity.(*T))
 		},
@@ -135,10 +139,12 @@ func (r *Repository[T]) newBuilder() *QueryBuilder[T] {
 	return newQueryBuilder(r.engine, &r.meta)
 }
 
-// Find looks up a single record by its primary key.
+// Find looks up a single record by its primary key. For a composite key, id is
+// the model's key struct.
 func (r *Repository[T]) Find(ctx context.Context, id any) (*T, error) {
+	cols := r.meta.PKColumns
 	return r.newBuilder().
-		Where(newComparison(r.meta.PKColumn, ast.OpEq, id)).
+		Where(pkPredicate(cols, keyValuesOf(r.meta.KeyValues, id))).
 		First(ctx)
 }
 

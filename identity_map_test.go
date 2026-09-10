@@ -24,9 +24,9 @@ type idmapSnapshot struct {
 }
 
 var idmapMeta = drel.ModelMeta[idmapRow]{
-	Table:    "idmap_rows",
-	Columns:  []string{"id", "title", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "idmap_rows",
+	Columns:   []string{"id", "title", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*idmapRow, error) {
 		p := &idmapRow{}
 		err := row.Scan(&p.ID, &p.Title, &p.CreatedAt, &p.UpdatedAt)

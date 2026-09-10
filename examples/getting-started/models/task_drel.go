@@ -97,7 +97,7 @@ func taskNormalizeKey(v any) any {
 var TaskMeta = drel.ModelMeta[Task]{
 	Table:         "tasks",
 	Columns:       []string{"id", "title", "done", "priority", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanTask,
 	Snapshot:      snapshotTask,
 	Diff:          diffTask,

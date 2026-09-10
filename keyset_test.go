@@ -96,3 +96,27 @@ func TestKeysetClause_NullCursorDefaultNullsErrors(t *testing.T) {
 	_, err := keysetClause(order, []any{nil, 10})
 	assert.ErrorIs(t, err, ErrCursorColumnNullable)
 }
+
+func TestCursorOrder_AppendsEveryKeyColumnAsATiebreak(t *testing.T) {
+	got := cursorOrder(
+		[]ast.OrderByExpr{{Column: "created_at", Direction: ast.Desc}},
+		[]string{"order_id", "line_no"},
+	)
+	require.Len(t, got, 3)
+	assert.Equal(t, "created_at", got[0].Column)
+	assert.Equal(t, "order_id", got[1].Column)
+	assert.Equal(t, ast.Asc, got[1].Direction)
+	assert.Equal(t, "line_no", got[2].Column)
+	assert.Equal(t, ast.Asc, got[2].Direction)
+}
+
+func TestCursorOrder_DoesNotDuplicateAKeyColumnAlreadyOrdered(t *testing.T) {
+	got := cursorOrder(
+		[]ast.OrderByExpr{{Column: "order_id", Direction: ast.Desc}},
+		[]string{"order_id", "line_no"},
+	)
+	require.Len(t, got, 2)
+	assert.Equal(t, "order_id", got[0].Column)
+	assert.Equal(t, ast.Desc, got[0].Direction)
+	assert.Equal(t, "line_no", got[1].Column)
+}

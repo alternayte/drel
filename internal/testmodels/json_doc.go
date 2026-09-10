@@ -12,9 +12,9 @@ type JSONDoc struct {
 }
 
 var JSONDocMeta = drel.ModelMeta[JSONDoc]{
-	Table:    "json_docs",
-	Columns:  []string{"id", "tags", "meta", "created_at", "updated_at"},
-	PKColumn: "id",
+	Table:     "json_docs",
+	Columns:   []string{"id", "tags", "meta", "created_at", "updated_at"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*JSONDoc, error) {
 		p := &JSONDoc{}
 		idPtr, createdAtPtr, updatedAtPtr := p.ScanPtrs()

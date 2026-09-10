@@ -105,7 +105,7 @@ func noteNormalizeKey(v any) any {
 var NoteMeta = drel.ModelMeta[Note]{
 	Table:         "notes",
 	Columns:       []string{"id", "slug", "title", "category", "pinned", "created_at", "updated_at"},
-	PKColumn:      "id",
+	PKColumns:     []string{"id"},
 	Scan:          scanNote,
 	Snapshot:      snapshotNote,
 	Diff:          diffNote,

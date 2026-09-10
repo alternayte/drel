@@ -199,7 +199,7 @@ func (q *IncludableQuery[T]) loadInto(ctx context.Context, entities []*T) error 
 
 // Find looks up a single record by primary key and loads included relationships.
 func (q *IncludableQuery[T]) Find(ctx context.Context, id any) (*T, error) {
-	entity, err := q.builder.Where(newComparison(q.repo.meta.PKColumn, ast.OpEq, id)).First(ctx)
+	entity, err := q.builder.Where(pkPredicate(q.repo.meta.PKColumns, keyValuesOf(q.repo.meta.KeyValues, id))).First(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +292,7 @@ func (q *TxIncludableQuery[T]) loadInto(ctx context.Context, entities []*T) erro
 
 // Find looks up a single record by primary key and loads included relationships.
 func (q *TxIncludableQuery[T]) Find(ctx context.Context, id any) (*T, error) {
-	entity, err := q.builder.Where(newComparison(q.repo.meta.PKColumn, ast.OpEq, id)).First(ctx)
+	entity, err := q.builder.Where(pkPredicate(q.repo.meta.PKColumns, keyValuesOf(q.repo.meta.KeyValues, id))).First(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -475,8 +475,10 @@ func (ie *includeExecutor) loadBelongsTo(ctx context.Context, parents []any, inc
 		return nil, nil
 	}
 
-	// Query related entities by their PK.
-	related, err := ie.queryByColumn(ctx, rel.RelatedMeta, rel.RelatedMeta.PKColumn, fkValues, inc)
+	// Query related entities by their PK. [0] is safe here: a composite-key
+	// model can never be a relationship target (codegen enforces this), so
+	// RelatedMeta.PKColumns is always exactly one column.
+	related, err := ie.queryByColumn(ctx, rel.RelatedMeta, rel.RelatedMeta.PKColumns[0], fkValues, inc)
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +578,10 @@ func (ie *includeExecutor) queryByColumn(ctx context.Context, meta *ModelMetaBas
 		if inc.limit != nil && len(batch) > 1 {
 			partitionOrder := inc.orderBy
 			if len(partitionOrder) == 0 {
-				partitionOrder = []ast.OrderByExpr{{Column: meta.PKColumn, Direction: ast.Asc}}
+				partitionOrder = make([]ast.OrderByExpr, len(meta.PKColumns))
+				for i, c := range meta.PKColumns {
+					partitionOrder[i] = ast.OrderByExpr{Column: c, Direction: ast.Asc}
+				}
 			}
 			node.OrderBy = nil
 			node.Limit = nil
@@ -693,7 +698,10 @@ func (ie *includeExecutor) loadManyToMany(ctx context.Context, parents []any, in
 		}
 	}
 
-	targets, err := ie.queryByColumn(ctx, rel.RelatedMeta, rel.RelatedMeta.PKColumn, targetPKs, inc)
+	// [0] is safe here: a composite-key model can never be a relationship
+	// target (codegen enforces this), so RelatedMeta.PKColumns is always
+	// exactly one column.
+	targets, err := ie.queryByColumn(ctx, rel.RelatedMeta, rel.RelatedMeta.PKColumns[0], targetPKs, inc)
 	if err != nil {
 		return nil, err
 	}

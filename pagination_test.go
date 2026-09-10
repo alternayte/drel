@@ -19,9 +19,9 @@ type pageRow struct {
 }
 
 var pageRowMeta = drel.ModelMeta[pageRow]{
-	Table:    "page_rows",
-	Columns:  []string{"id", "name", "rank"},
-	PKColumn: "id",
+	Table:     "page_rows",
+	Columns:   []string{"id", "name", "rank"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*pageRow, error) {
 		p := &pageRow{}
 		err := row.Scan(&p.ID, &p.Name, &p.Rank)
@@ -187,9 +187,9 @@ type catRow struct {
 }
 
 var catRowMeta = drel.ModelMeta[catRow]{
-	Table:    "cat_rows",
-	Columns:  []string{"id", "kind"},
-	PKColumn: "id",
+	Table:     "cat_rows",
+	Columns:   []string{"id", "kind"},
+	PKColumns: []string{"id"},
 	Scan: func(r drel.Row) (*catRow, error) {
 		c := &catRow{}
 		return c, r.Scan(&c.ID, &c.Kind)
@@ -351,9 +351,9 @@ type nullRankRow struct {
 }
 
 var nullRankMeta = drel.ModelMeta[nullRankRow]{
-	Table:    "null_rank_rows",
-	Columns:  []string{"id", "rank"},
-	PKColumn: "id",
+	Table:     "null_rank_rows",
+	Columns:   []string{"id", "rank"},
+	PKColumns: []string{"id"},
 	Scan: func(r drel.Row) (*nullRankRow, error) {
 		x := &nullRankRow{}
 		return x, r.Scan(&x.ID, &x.Rank)
@@ -492,9 +492,9 @@ type floatRow struct {
 }
 
 var floatRowMeta = drel.ModelMeta[floatRow]{
-	Table:    "float_rows",
-	Columns:  []string{"id", "score"},
-	PKColumn: "id",
+	Table:     "float_rows",
+	Columns:   []string{"id", "score"},
+	PKColumns: []string{"id"},
 	Scan: func(r drel.Row) (*floatRow, error) {
 		x := &floatRow{}
 		return x, r.Scan(&x.ID, &x.Score)

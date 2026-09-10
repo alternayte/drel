@@ -20,9 +20,9 @@ type g8Order struct {
 }
 
 var g8OrderMeta = drel.ModelMeta[g8Order]{
-	Table:    "g8_orders",
-	Columns:  []string{"id", "user_id", "category", "amount"},
-	PKColumn: "id",
+	Table:     "g8_orders",
+	Columns:   []string{"id", "user_id", "category", "amount"},
+	PKColumns: []string{"id"},
 	Scan: func(row drel.Row) (*g8Order, error) {
 		o := &g8Order{}
 		err := row.Scan(&o.ID, &o.UserID, &o.Category, &o.Amount)
