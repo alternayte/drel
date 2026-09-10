@@ -57,3 +57,12 @@ type TenantDoc struct {
 	drel.Model[TenantDocKey]
 	Title string `db:"title"`
 }
+
+// AuditOrderLine exercises the audit trait with a composite key. The generated
+// column list interleaves the trait columns with the two key columns, so the
+// insert, the scan and the update must all keep the columns aligned.
+type AuditOrderLine struct {
+	drel.Model[OrderLineKey]
+	drel.Audit
+	Qty int `db:"qty"`
+}
