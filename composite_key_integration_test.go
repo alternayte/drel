@@ -21,6 +21,14 @@ import (
 // The composite-key tables are created from the generated DDL, not from
 // hand-written SQL. The schema emitter and the code emitter therefore both run
 // against a real database in these tests.
+//
+// Invariant for a new sub-test: the sub-tests share one order_lines table and
+// one soft, versioned, soft-versioned and audit table each. They are isolated
+// only by a disjoint order id range, and only because they run in sequence.
+// The ranges in use are 3, 5, 7, 9, 42, 60, 300, 400 to 401, and 500. Claim a
+// new range for a new sub-test. Do not call t.Parallel() in any of them: a
+// parallel sub-test would read another sub-test's rows, and the failure would
+// look like a paging bug rather than a test-isolation bug.
 var (
 	compositeModelsOnce sync.Once
 	compositeModels     []codegen.ModelInfo
