@@ -15,8 +15,17 @@ import (
 )
 
 func ScanPackages(patterns []string, dir ...string) ([]ModelInfo, error) {
+	// The mode deliberately omits NeedDeps and NeedImports. NeedDeps applies the
+	// other bits transitively, so NeedSyntax|NeedTypesInfo would make every load
+	// re-parse and re-type-check drel and its whole dependency graph from source.
+	// This scanner never reads a dependency's syntax or TypesInfo: it walks only
+	// pkg.Types.Scope(), and resolves types from other packages through
+	// types.Named (Obj().Pkg().Path(), TypeArgs()), which the type-checker
+	// satisfies from export data. Adding NeedDeps back costs roughly 5x the CPU
+	// per load and buys nothing — it once pushed this package past go test's
+	// 600s per-package default in CI.
 	cfg := &packages.Config{
-		Mode: packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedName | packages.NeedFiles | packages.NeedDeps | packages.NeedImports,
+		Mode: packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedName | packages.NeedFiles,
 	}
 	if len(dir) > 0 && dir[0] != "" {
 		cfg.Dir = dir[0]
