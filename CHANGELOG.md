@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
-## [Unreleased]
+## [0.8.0] - 2026-09-10
 
 ### Added
 
@@ -41,6 +41,11 @@ minor versions may contain breaking changes.
   table rebuild instead of a `-- WARNING` comment. Several changes to one table
   produce one rebuild. The rebuild uses `PRAGMA defer_foreign_keys`, because
   `PRAGMA foreign_keys` is a no-op inside the runner's transaction.
+- Code generation is substantially faster. The package loader requested
+  `NeedDeps`, which applies the other mode bits transitively and made every load
+  re-parse and re-type-check drel and its whole dependency graph from source.
+  The scanner never read a dependency's syntax, so the flag is gone and
+  dependency types now come from export data. Generated output is unchanged.
 
 ### Changed
 
@@ -547,6 +552,7 @@ Initial release: Postgres (pgx) core, code generation (model scanning, query
 builders, scan/snapshot/diff), basic CRUD, snapshot-based change tracking,
 implicit transactions, and the type-safe query builder.
 
+[0.8.0]: https://github.com/alternayte/drel/releases/tag/v0.8.0
 [0.7.1]: https://github.com/alternayte/drel/releases/tag/v0.7.1
 [0.7.0]: https://github.com/alternayte/drel/releases/tag/v0.7.0
 [0.6.0]: https://github.com/alternayte/drel/releases/tag/v0.6.0
