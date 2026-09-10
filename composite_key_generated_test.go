@@ -37,5 +37,5 @@ func TestCompositeKey_GeneratedFilesAreCurrent(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, string(want), string(got), "%s is stale; regenerate it", path)
 	}
-	assert.Equal(t, 5, seen, "every composite-key test model must be scanned")
+	assert.Equal(t, 6, seen, "every composite-key test model must be scanned")
 }
