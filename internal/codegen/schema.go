@@ -647,14 +647,36 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 // function emits no SQL and reports needsRebuild instead, so that diffTable can
 // emit one table rebuild covering every changed column on the table.
 func diffColumn(table string, old, new Column, dialect string) (up, down []string, needsRebuild bool) {
+	// A CHECK constraint is dropped before the type change and added after it.
+	// PostgreSQL re-checks a surviving constraint against the new type, and a
+	// constraint written for the old type does not hold for the new one.
+	//
+	// down is built as the element-wise mirror of up, because DiffSchemas
+	// reverses the down slice as a whole: position 0 of down must therefore
+	// undo position 0 of up, so the reversal puts the undo steps in order.
+	if old.Check != new.Check && dialect != "sqlite" && old.Check != "" {
+		name := checkConstraintName(table, new.Name)
+		up = append(up, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;",
+			quoteIdent(table), quoteIdent(name)))
+		down = append(down, fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s);",
+			quoteIdent(table), quoteIdent(name), old.Check))
+	}
+
 	if old.Type != new.Type {
 		if dialect == "sqlite" {
 			needsRebuild = true
 		} else {
-			up = append(up, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s;",
-				quoteIdent(table), quoteIdent(new.Name), new.Type))
-			down = append(down, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s;",
-				quoteIdent(table), quoteIdent(new.Name), old.Type))
+			if isConstrainedColumnType(old.Type) || isConstrainedColumnType(new.Type) {
+				// The type string carries PRIMARY KEY / SERIAL, so the ALTER
+				// below is not valid on its own. Say so rather than emit SQL
+				// that looks reviewed.
+				up = append(up, fmt.Sprintf("-- WARNING: %s.%s is a key column (%s -> %s); drop and recreate the key by hand, the statement below is incomplete",
+					table, new.Name, old.Type, new.Type))
+				down = append(down, fmt.Sprintf("-- WARNING: %s.%s is a key column (%s -> %s); drop and recreate the key by hand, the statement below is incomplete",
+					table, new.Name, new.Type, old.Type))
+			}
+			up = append(up, alterColumnTypeSQL(table, new.Name, new.Type))
+			down = append(down, alterColumnTypeSQL(table, new.Name, old.Type))
 		}
 	}
 
@@ -685,30 +707,58 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 	if old.Check != new.Check {
 		if dialect == "sqlite" {
 			needsRebuild = true
-		} else {
+		} else if new.Check != "" {
+			// The old constraint was dropped ahead of the type change above.
 			name := checkConstraintName(table, new.Name)
-			// UP: drop the old constraint (if any), add the new one (if any).
-			if old.Check != "" {
-				up = append(up, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;",
-					quoteIdent(table), quoteIdent(name)))
-			}
-			if new.Check != "" {
-				up = append(up, fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s);",
-					quoteIdent(table), quoteIdent(name), new.Check))
-			}
-			// DOWN: drop the new constraint (if any), restore the old one (if any).
-			if new.Check != "" {
-				down = append(down, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;",
-					quoteIdent(table), quoteIdent(name)))
-			}
-			if old.Check != "" {
-				down = append(down, fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s);",
-					quoteIdent(table), quoteIdent(name), old.Check))
-			}
+			up = append(up, fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s);",
+				quoteIdent(table), quoteIdent(name), new.Check))
+			down = append(down, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;",
+				quoteIdent(table), quoteIdent(name)))
 		}
 	}
 
 	return up, down, needsRebuild
+}
+
+// alterColumnTypeSQL builds a PostgreSQL ALTER COLUMN ... TYPE statement with
+// the USING clause the server needs whenever no assignment cast exists between
+// the two types -- text to an enum, or text to timestamptz, for example.
+// Without USING, PostgreSQL refuses the statement outright. An explicit cast
+// covers every pair a generated schema produces, and the ones it cannot cast
+// fail with the server's own message naming both types.
+func alterColumnTypeSQL(table, column, sqlType string) string {
+	return fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s USING %s::%s;",
+		quoteIdent(table), quoteIdent(column), sqlType, quoteIdent(column), castTargetType(sqlType))
+}
+
+// castTargetType returns the part of a column type string usable after "::".
+// A key column's type embeds its constraint (e.g. "bigint PRIMARY KEY",
+// "BIGSERIAL PRIMARY KEY"), which is not a type name.
+func castTargetType(sqlType string) string {
+	t := sqlType
+	if i := strings.Index(strings.ToUpper(t), " PRIMARY KEY"); i >= 0 {
+		t = t[:i]
+	}
+	t = strings.TrimSpace(t)
+	switch strings.ToUpper(t) {
+	case "SERIAL":
+		return "integer"
+	case "BIGSERIAL":
+		return "bigint"
+	case "SMALLSERIAL":
+		return "smallint"
+	}
+	return t
+}
+
+// isConstrainedColumnType reports whether a column type string carries a key
+// constraint rather than naming a type alone. Changing such a column's type
+// needs the key dropped and recreated, which the differ does not do.
+func isConstrainedColumnType(sqlType string) bool {
+	u := strings.ToUpper(sqlType)
+	return strings.Contains(u, "PRIMARY KEY") ||
+		strings.Contains(u, "SERIAL") ||
+		strings.Contains(u, "AUTOINCREMENT")
 }
 
 // diffEnumValues emits migration SQL for added/removed values of a Postgres

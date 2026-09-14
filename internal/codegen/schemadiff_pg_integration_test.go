@@ -90,3 +90,58 @@ func TestDiffSchemas_AppliesToRealPostgres(t *testing.T) {
 	_, err = drv.Exec(ctx, down)
 	require.NoError(t, err, "down migration should apply on Postgres:\n%s", down)
 }
+
+// TestDiffSchemas_TypeChangeWithData applies a text -> enum and a text ->
+// timestamptz change against real Postgres, on a table that already holds rows.
+// PostgreSQL refuses both casts without a USING clause, so this is the case the
+// generated migration got wrong: it had to be written by hand.
+func TestDiffSchemas_TypeChangeWithData(t *testing.T) {
+	ctx := context.Background()
+	drv := pgDriver(t)
+
+	v1 := []codegen.ModelInfo{{
+		Name: "QuestEvent", TableName: "quest_events", PKType: "int",
+		Fields: []codegen.FieldInfo{
+			{Name: "ToState", GoType: "string", ColumnName: "to_state", IsExported: true},
+			{Name: "StartedAt", GoType: "string", ColumnName: "started_at", IsExported: true},
+		},
+	}}
+	_, err := drv.Exec(ctx, codegen.GenerateSchema(v1, "postgres"))
+	require.NoError(t, err)
+
+	_, err = drv.Exec(ctx, "INSERT INTO quest_events (to_state, started_at) VALUES ('draft', '2026-01-02T03:04:05Z')")
+	require.NoError(t, err)
+
+	v2 := []codegen.ModelInfo{{
+		Name: "QuestEvent", TableName: "quest_events", PKType: "int",
+		Fields: []codegen.FieldInfo{
+			{
+				Name: "ToState", GoType: "QuestState", LocalGoType: "QuestState",
+				ColumnName: "to_state", IsExported: true,
+				IsEnum: true, EnumValues: []string{"draft", "live"}, EnumBaseType: "string",
+			},
+			{Name: "StartedAt", GoType: "time.Time", LocalGoType: "time.Time", ColumnName: "started_at", IsExported: true},
+		},
+	}}
+
+	up, down, err := codegen.DiffSchemas(codegen.BuildSchema(v1, "postgres"), codegen.BuildSchema(v2, "postgres"), "postgres")
+	require.NoError(t, err)
+	require.NotEmpty(t, up)
+
+	_, err = drv.Exec(ctx, up)
+	require.NoError(t, err, "up migration should apply on Postgres:\n%s", up)
+
+	// The row survived both casts.
+	var state string
+	var started time.Time
+	require.NoError(t, drv.QueryRow(ctx, "SELECT to_state::text, started_at FROM quest_events").Scan(&state, &started))
+	assert.Equal(t, "draft", state)
+	assert.Equal(t, 2026, started.Year())
+
+	// The enum column rejects a value outside the set.
+	_, err = drv.Exec(ctx, "INSERT INTO quest_events (to_state, started_at) VALUES ('bogus', now())")
+	assert.Error(t, err, "enum column should reject a value outside the set")
+
+	_, err = drv.Exec(ctx, down)
+	require.NoError(t, err, "down migration should apply on Postgres:\n%s", down)
+}

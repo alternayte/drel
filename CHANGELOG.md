@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- A column type change now carries the `USING` clause PostgreSQL needs. A field
+  changed from `string` to an enum type, or to `time.Time`, emitted a bare
+  `ALTER COLUMN ... TYPE`, and PostgreSQL refused it with `column "..." cannot
+  be cast automatically`. The migration had to be written by hand.
+- A column's CHECK constraint is now dropped before its type changes and added
+  after, in both directions. The drop came after the type change on the up path,
+  so PostgreSQL re-checked an expression written for the old type; on the down
+  path the old constraint was restored before the type was reverted.
+- A type change on a key column (one whose type carries `PRIMARY KEY` or
+  `SERIAL`) now emits a `-- WARNING` naming it. The differ does not drop and
+  recreate the key, so the statement is incomplete and must be written by hand.
+
 ## [0.9.0] - 2026-09-14
 
 ### Added

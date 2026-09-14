@@ -130,8 +130,8 @@ func TestDiffSchemas_TypeChange_Postgres(t *testing.T) {
 	}}
 	up, down, err := DiffSchemas(old, newS, "postgres")
 	require.NoError(t, err)
-	assert.Contains(t, up, `ALTER TABLE "users" ALTER COLUMN "age" TYPE bigint;`)
-	assert.Contains(t, down, `ALTER TABLE "users" ALTER COLUMN "age" TYPE integer;`)
+	assert.Contains(t, up, `ALTER TABLE "users" ALTER COLUMN "age" TYPE bigint USING "age"::bigint;`)
+	assert.Contains(t, down, `ALTER TABLE "users" ALTER COLUMN "age" TYPE integer USING "age"::integer;`)
 }
 
 func TestDiffSchemas_TypeChange_SQLiteRebuild(t *testing.T) {
