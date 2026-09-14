@@ -254,6 +254,31 @@ composite key (application-assigned, one column per exported field).
   imports required. Verified end-to-end against a real libSQL server over HTTP.
   Prefer `libsql://`/`https://` over `ws://` for models with `time.Time` columns.
 
+### Bringing your own driver
+
+drel bundles `tursodatabase/libsql-client-go` for libSQL/Turso, because it is
+the only pure-Go client: a drel build stays a single static binary with no CGO
+and no native library. Its repository carries a deprecation notice, while
+Turso's Go SDK reference still names it the package for remote Turso Cloud
+access. drel keeps it, and opens a seam instead of taking a second dependency.
+
+To use `tursodatabase/go-libsql` (CGO, embedded replicas), a `tursogo` package,
+or any other `database/sql` driver, open the handle yourself and pass it in:
+
+```go
+import _ "github.com/tursodatabase/go-libsql"
+
+sqlDB, err := sql.Open("libsql", dsn)
+if err != nil {
+    return err
+}
+engine, err := drel.NewEngine("", drel.WithSQLDB(sqlDB, "sqlite"))
+```
+
+`WithSQLDB` takes the dialect name — `"sqlite"` for any SQLite-compatible
+database, `"postgres"` otherwise — and the engine closes the handle when it
+closes. The DSN argument is unused for the primary connection.
+
 ## Limitations
 
 - Migration renames must be declared, not inferred. Mark a renamed column with

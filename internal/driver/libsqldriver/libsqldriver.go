@@ -1,129 +1,34 @@
 // Package libsqldriver implements driver.Driver for libSQL / Turso using the
 // database/sql libsql driver.
+//
+// The upstream client (github.com/tursodatabase/libsql-client-go) carries a
+// deprecation notice on its repository, while Turso's own Go SDK reference
+// still names it the package for remote Turso Cloud access. It stays here
+// because it is the only pure-Go option: go-libsql needs CGO, and the tursogo
+// packages target the newer engine and have no tagged release. A caller who
+// wants either one supplies it through drel.WithSQLDB, so drel does not take
+// the dependency.
 package libsqldriver
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 
 	"github.com/alternayte/drel/internal/driver"
+	"github.com/alternayte/drel/internal/driver/sqldriver"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 )
 
-// LibSQLDriver implements driver.Driver over a libSQL/Turso connection.
-type LibSQLDriver struct {
-	db *sql.DB
-}
-
 // New opens a libSQL database at the given DSN (e.g. "libsql://name.turso.io?authToken=...").
-func New(dsn string, pc ...driver.PoolConfig) (*LibSQLDriver, error) {
+func New(dsn string, pc ...driver.PoolConfig) (*sqldriver.Driver, error) {
 	db, err := sql.Open("libsql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("libsqldriver: open: %w", err)
 	}
-	if len(pc) > 0 {
-		if pc[0].MaxConns > 0 {
-			db.SetMaxOpenConns(pc[0].MaxConns)
-		}
-		if pc[0].ConnMaxLifetime > 0 {
-			db.SetConnMaxLifetime(pc[0].ConnMaxLifetime)
-		}
-		if pc[0].ConnMaxIdleTime > 0 {
-			db.SetConnMaxIdleTime(pc[0].ConnMaxIdleTime)
-		}
-	}
+	sqldriver.ApplyPoolConfig(db, pc...)
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("libsqldriver: open: %w", err)
 	}
-	return &LibSQLDriver{db: db}, nil
+	return sqldriver.New(db), nil
 }
-
-func (d *LibSQLDriver) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
-	return d.db.QueryRowContext(ctx, query, args...)
-}
-
-func (d *LibSQLDriver) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-	rows, err := d.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &libsqlRows{rows: rows}, nil
-}
-
-func (d *LibSQLDriver) Exec(ctx context.Context, query string, args ...any) (int64, error) {
-	result, err := d.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-func (d *LibSQLDriver) Begin(ctx context.Context) (driver.Tx, error) {
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &libsqlTx{tx: tx}, nil
-}
-
-// BeginTx starts a transaction. libSQL supports only SERIALIZABLE isolation, so
-// the requested level is ignored; the ReadOnly flag is forwarded.
-func (d *LibSQLDriver) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	tx, err := d.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: opts.ReadOnly})
-	if err != nil {
-		return nil, err
-	}
-	return &libsqlTx{tx: tx}, nil
-}
-
-func (d *LibSQLDriver) Close() { d.db.Close() }
-
-// Ping verifies a working connection to the database.
-func (d *LibSQLDriver) Ping(ctx context.Context) error {
-	return d.db.PingContext(ctx)
-}
-
-// Stat returns a snapshot of the database/sql connection pool.
-func (d *LibSQLDriver) Stat() driver.PoolStat {
-	s := d.db.Stats()
-	return driver.PoolStat{
-		MaxConns:      int32(s.MaxOpenConnections),
-		AcquiredConns: int32(s.InUse),
-		IdleConns:     int32(s.Idle),
-		TotalConns:    int32(s.OpenConnections),
-	}
-}
-
-type libsqlRows struct{ rows *sql.Rows }
-
-func (r *libsqlRows) Next() bool             { return r.rows.Next() }
-func (r *libsqlRows) Scan(dest ...any) error { return r.rows.Scan(dest...) }
-func (r *libsqlRows) Close()                 { r.rows.Close() }
-func (r *libsqlRows) Err() error             { return r.rows.Err() }
-
-type libsqlTx struct{ tx *sql.Tx }
-
-func (t *libsqlTx) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
-	return t.tx.QueryRowContext(ctx, query, args...)
-}
-
-func (t *libsqlTx) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-	rows, err := t.tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &libsqlRows{rows: rows}, nil
-}
-
-func (t *libsqlTx) Exec(ctx context.Context, query string, args ...any) (int64, error) {
-	result, err := t.tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-func (t *libsqlTx) Commit(ctx context.Context) error   { return t.tx.Commit() }
-func (t *libsqlTx) Rollback(ctx context.Context) error { return t.tx.Rollback() }

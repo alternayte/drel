@@ -2,6 +2,7 @@ package drel
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	dialectsqlite "github.com/alternayte/drel/internal/dialect/sqlite"
 	"github.com/alternayte/drel/internal/driver"
 	"github.com/alternayte/drel/internal/driver/pgxdriver"
+	"github.com/alternayte/drel/internal/driver/sqldriver"
 	"github.com/alternayte/drel/internal/driver/sqlitedriver"
 	"github.com/alternayte/drel/internal/dsn"
 	"github.com/alternayte/drel/internal/migrate"
@@ -293,8 +295,37 @@ func WithContext(ctx context.Context) Option {
 	}
 }
 
+// WithSQLDB makes the engine use a database/sql handle you opened yourself
+// instead of opening one from the DSN. NewEngine then ignores the DSN for the
+// primary connection. Pass the dialect name: "sqlite" for any
+// SQLite-compatible database (SQLite, libSQL, Turso), or "postgres".
+//
+// Use it to plug a driver drel does not depend on. drel ships the pure-Go
+// libSQL client so that a build stays a single static binary; a caller who
+// wants tursodatabase/go-libsql (CGO, embedded replicas) or a tursogo package
+// registers it and passes the handle here:
+//
+//	sqlDB, err := sql.Open("libsql", dsn)
+//	db, err := db.OpenWith(drel.WithSQLDB(sqlDB, "sqlite"))
+//
+// The engine closes the handle when it closes.
+func WithSQLDB(db *sql.DB, dialectName string) Option {
+	return func(cfg *engineConfig) {
+		cfg.drv = sqldriver.New(db)
+		switch dialectName {
+		case "postgres":
+			cfg.dia = postgres.New()
+		default:
+			cfg.dia = dialectsqlite.New()
+		}
+	}
+}
+
 // WithDriver overrides the driver used by the engine.
 // When set, auto-detection is skipped for the driver.
+//
+// driver.Driver is an internal interface, so this option is reachable only from
+// inside drel. An application supplies its own connection with WithSQLDB.
 func WithDriver(drv driver.Driver) Option {
 	return func(cfg *engineConfig) {
 		cfg.drv = drv

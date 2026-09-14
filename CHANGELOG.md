@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- `drel.WithSQLDB(db *sql.DB, dialect string)`: use a `database/sql` handle you
+  opened yourself instead of a DSN. It lets an application supply a driver drel
+  does not depend on — `tursodatabase/go-libsql` for Turso embedded replicas,
+  for example — while drel keeps its pure-Go, CGO-free default.
+
+### Fixed
+
+- An enum type declared in a package other than the model's no longer emits
+  `Values()` and `IsValid()` into the model package. Go forbids a method on a
+  non-local type, so the generated file did not compile. The column CHECK
+  constraint (or the Postgres enum type) still enforces the value set.
+- A field type that maps to no column shape is now rejected during the scan,
+  with the field name, the type, and the `db:"...,type=..."` escape hatch. It
+  previously reached the emitter, or became a `jsonb` column by default.
+- A code-generation failure that produces invalid Go now quotes the emitted
+  line, instead of reporting only a line, a column and a parser message.
+
 ## [0.8.1] - 2026-09-14
 
 ### Fixed
