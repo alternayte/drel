@@ -56,7 +56,7 @@ func (e *batchPartialError) Unwrap() error {
 // A batch created with Engine.NewBatch pipelines on pgx (and runs sequentially
 // on SQLite/libSQL). A batch created with Tx.NewBatch always runs sequentially
 // on the transaction connection so it observes the transaction's uncommitted
-// writes; a UnitOfWork batches the same way via the Tx it opens during a flush.
+// writes; a transaction batches the same way during its flush.
 // Batch results are read-only and are NOT snapshotted into a change tracker:
 // to mutate-and-save loaded entities, load them via Find/All/Include instead.
 type Batch struct {

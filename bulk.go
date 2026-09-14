@@ -145,7 +145,7 @@ func bulkInsertColumns(ctx context.Context, base *ModelMetaBase, entity any) ([]
 // NOT go through the change tracker. Domain events recorded on the entities
 // (RecordEvent) are NOT collected, NOT written to the outbox, and NOT
 // dispatched to before/after-commit hooks. Use SaveChanges (Engine.Transaction
-// or a UnitOfWork) when you need event dispatch, or BulkInsertWithEvents to
+// or a transaction) when you need event dispatch, or BulkInsertWithEvents to
 // persist events through the outbox path inside the bulk transaction.
 func (r *Repository[T]) BulkInsert(ctx context.Context, entities []*T) (int, error) {
 	return r.bulkInsert(ctx, entities, false)

@@ -17,14 +17,14 @@ CLI (cmd/drel)           Runtime library (drel package)
   ├── model scanner        ├── Engine / Tx (context)
   ├── codegen emitter      ├── Repository[T]
   └── migration gen        ├── Query builder → AST → Dialect emitter
-      (Atlas)              │     ├── Postgres (pgx)
-                           │     └── SQLite (go-sqlite3 / libsql)
+      (built-in differ)    │     ├── Postgres (pgx)
+                           │     └── SQLite (modernc / libsql)
                            └── Change tracker (snapshot/diff)
 ```
 
 **Query path:** Query Builder API → AST nodes → Dialect Emitter → SQL string + args
 
-**Change tracking:** `Find` snapshots entity state via generated `snapshotT()`. `SaveChanges` diffs via generated `diffT()`. Only changed fields go into UPDATE. No reflection at any point.
+**Change tracking:** `Find` snapshots entity state via generated `snapshotT()`. The transaction's flush diffs via generated `diffT()`. Only changed fields go into UPDATE. No reflection at any point.
 
 ## Project Layout
 
@@ -37,7 +37,7 @@ features/<name>/
   events.go         — domain event types
 db/
   drel_gen.go       — GENERATED: aggregated DB struct
-  migrations/       — SQL migration files (Atlas)
+  migrations/       — SQL migration files
 docs/
   prd.md            — product requirements document
 ```
@@ -77,14 +77,18 @@ go run ./cmd/drel migrate status
 | Dependency | Purpose | Scope |
 |---|---|---|
 | `jackc/pgx/v5` | Postgres driver | Runtime (Postgres) |
-| `mattn/go-sqlite3` or `modernc.org/sqlite` | SQLite driver | Runtime (SQLite) |
-| `tursodatabase/libsql-client-go` | Turso driver | Runtime (LibSQL) |
+| `modernc.org/sqlite` | SQLite driver, pure Go | Runtime (SQLite) |
+| `tursodatabase/libsql-client-go` | libSQL/Turso driver, pure Go | Runtime (LibSQL) |
 | `github.com/google/uuid` | UUIDv7 generation for app-assigned keys | Runtime (only when using uuid PKs) |
-| `ariga.io/atlas` | Migration diffing/generation | CLI only |
+| `gopkg.in/yaml.v3` | drel.yaml | CLI only |
 | `golang.org/x/tools/go/packages` | Go source analysis for codegen | CLI only |
 
-Zero runtime dependencies beyond the database driver and `google/uuid` (used only for UUIDv7 key generation).
+Migrations use a built-in schema differ, not Atlas. Every dependency is pure Go,
+so a build is a single static binary with no CGO. A caller who wants another
+driver passes their own `*sql.DB` to `drel.WithSQLDB`.
 
-## Current Milestone
+## Current State
 
-**M1 — Core Engine:** Model definition, codegen CLI (scan + emit), Postgres dialect with pgx, basic CRUD, change tracking with snapshot diffing, implicit transactions, type-safe query builder.
+Released through 0.8.1. The core engine, codegen, both dialects, change
+tracking, relationships and includes, migrations, bulk and batch operations,
+events, outbox/inbox, and observability are implemented. See CHANGELOG.md.

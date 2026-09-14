@@ -39,7 +39,7 @@ type QueryBuilder[T any] struct {
 	timeout *time.Duration
 
 	// When tracker is non-null, results materialized by All are snapshotted and
-	// tracked (used by UnitOfWork repositories).
+	// tracked (used by the transaction's repositories).
 	tracker *changeTracker
 	base    *ModelMetaBase
 }

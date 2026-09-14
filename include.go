@@ -344,11 +344,11 @@ func (r txIncludeReader) includeDialect() dialect.Dialect { return r.tx.engine.d
 
 // includeExecutor runs split queries to load related entities. When tracker is
 // non-nil, each loaded child is snapshotted and tracked so mutations to it are
-// flushed by SaveChanges (UnitOfWork read-your-writes semantics).
+// flushed by the transaction (read-your-writes semantics).
 type includeExecutor struct {
 	reader     includeReader
 	parentMeta *ModelMetaBase
-	primary    bool           // force primary reads (UoW read-your-writes / in-tx)
+	primary    bool           // force primary reads (read-your-writes inside a transaction)
 	tracker    *changeTracker // nil ⇒ children are not tracked (read-only)
 }
 
