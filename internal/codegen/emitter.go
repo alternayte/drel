@@ -135,7 +135,8 @@ func isMapGoType(goType string) bool {
 }
 
 // isMappableField reports whether codegen can emit valid DDL + scan/value/diff
-// for the field. Anything else is rejected loudly instead of emitting text + !=.
+// for the field. The scan already rejects an unmappable type by name (see
+// classifyField); this is the backstop for a FieldInfo built by hand.
 func isMappableField(f FieldInfo) bool {
 	if f.TypeOverride != "" {
 		return true
@@ -478,6 +479,13 @@ func emitEnumValidators(b *strings.Builder, m ModelInfo) {
 	seen := map[string]bool{}
 	for _, f := range columnFields(m.Fields) {
 		if !f.IsEnum || len(f.EnumValues) == 0 {
+			continue
+		}
+		if f.TypePkgPath != "" {
+			// The enum is declared in another package. Go forbids a method on a
+			// non-local type, so the helpers belong to that package's own
+			// generated code, not to this file. The column CHECK constraint (or
+			// the Postgres enum type) still enforces the value set.
 			continue
 		}
 		key := enumTypeKey(f)

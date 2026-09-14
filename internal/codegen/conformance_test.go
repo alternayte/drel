@@ -129,12 +129,27 @@ type Fact struct {
 type Facts []Fact
 `
 
+// A second package, so the corpus covers a type declared outside the model
+// package: Go forbids a method on a non-local type, so its enum helpers must
+// not be emitted into the model package.
+const conformanceForeign = `package kinds
+
+// Tier is an enum declared outside the model package.
+type Tier string
+
+const (
+	TierFree Tier = "free"
+	TierPaid Tier = "paid"
+)
+`
+
 const conformanceModels = `package shapes
 
 import (
 	"time"
 
 	"github.com/alternayte/drel"
+	"testmod/kinds"
 )
 
 // Everything exercises one field of each supported shape.
@@ -153,10 +168,11 @@ type Everything struct {
 	startedAt *time.Time ` + "`db:\"started_at\"`" + `
 	endedAt   time.Time  ` + "`db:\"ended_at\"`" + `
 
-	// Enums and named primitives.
-	state    State    ` + "`db:\"state\"`" + `
-	level    Level    ` + "`db:\"level\"`" + `
-	priority Priority ` + "`db:\"priority\"`" + `
+	// Enums and named primitives. tier is declared in another package.
+	state    State      ` + "`db:\"state\"`" + `
+	level    Level      ` + "`db:\"level\"`" + `
+	priority Priority   ` + "`db:\"priority\"`" + `
+	tier     kinds.Tier ` + "`db:\"tier\"`" + `
 
 	// Value objects, single- and multi-column.
 	email   Email ` + "`db:\"email,unique\"`" + `
@@ -191,6 +207,7 @@ type StringKey struct {
 
 func TestCodegenConformance(t *testing.T) {
 	dir := setupGenerateModule(t, map[string]string{
+		"kinds/tier.go":    conformanceForeign,
 		"shapes/vo.go":     conformanceValueObjects,
 		"shapes/types.go":  conformanceTypes,
 		"shapes/models.go": conformanceModels,
@@ -225,7 +242,49 @@ func TestCodegenConformance(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(both, "func StateValues()"))
 	assert.Equal(t, 1, strings.Count(both, "func (r Level) IsValid()"))
 
+	// An enum declared in another package gets no helpers here: Go forbids a
+	// method on a non-local type. The column still carries the value set.
+	assert.NotContains(t, both, "func (r Tier) IsValid()")
+	assert.NotContains(t, both, "func TierValues()")
+
 	// The package compiles. This is the assertion that catches a rendering bug
 	// the string assertions above do not name.
 	buildIn(t, dir)
+}
+
+// A type that maps to no column shape is rejected by name. There is no
+// catch-all: before classifyField, an unrecognised struct became a jsonb column.
+func TestCodegenConformance_RejectsUnmappableTypes(t *testing.T) {
+	cases := []struct {
+		name  string
+		field string
+		want  string
+	}{
+		{
+			name:  "channel",
+			field: "ch chan int `db:\"ch\"`",
+			want:  "maps to no column shape",
+		},
+		{
+			name:  "byte slice",
+			field: "payload []byte `db:\"payload\"`",
+			want:  "[]byte columns are not supported",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupGenerateModule(t, map[string]string{
+				"shapes/model.go": "package shapes\n\nimport \"github.com/alternayte/drel\"\n\ntype Thing struct {\n\tdrel.Model[int]\n\t" + tc.field + "\n}\n",
+				"drel.yaml":       "packages:\n  - ./shapes\noutput:\n  db: ./db/drel_gen.go\n",
+			})
+			origDir, err := os.Getwd()
+			require.NoError(t, err)
+			t.Cleanup(func() { os.Chdir(origDir) })
+			require.NoError(t, os.Chdir(dir))
+
+			err = Generate("drel.yaml")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
 }

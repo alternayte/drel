@@ -401,69 +401,71 @@ func extractFields(st *types.Struct, ownerPkgPath string) ([]FieldInfo, error) {
 
 		if dbCol != "" {
 			goTypeStr := f.Type().String()
-			if isPrimitiveType(goTypeStr) {
+
+			// --- How the type is written in generated Go source. ---
+			switch {
+			case isPrimitiveType(goTypeStr):
 				fi.LocalGoType = goTypeStr
-			} else if isUnnamedComposite(f.Type()) {
+			case isUnnamedComposite(f.Type()):
 				// A type literal such as []Fact has no name to qualify: render
 				// it element by element so same-package elements stay
 				// unqualified and foreign ones carry a resolvable placeholder.
 				fi.LocalGoType, fi.TypeRefPkgs = compositeTypeString(f.Type(), ownerPkgPath)
 				fi.IsPointer = isPointerType(f.Type())
-				fi.IsJSON = isJSONContainer(f.Type())
-				fi.IsArray = isSliceType(f.Type())
-			} else {
+			default:
 				fi.LocalGoType = localTypeName(f.Type())
-				fieldPkg := typePkgPath(f.Type())
-				if fieldPkg != ownerPkgPath {
+				if fieldPkg := typePkgPath(f.Type()); fieldPkg != ownerPkgPath {
 					fi.TypePkgPath = fieldPkg
 				}
 				fi.IsPointer = isPointerType(f.Type())
-				if isScannerValuer(f.Type()) {
-					fi.IsVO = true
-					fi.VOBaseType = voBaseType(f.Type())
-					fi.HasEqual = hasMethod(f.Type(), "Equal")
-					fi.IsComparable = types.Comparable(voUnderlyingNamed(f.Type()))
-					fi.HasIsZero = hasMethod(f.Type(), "IsZero")
+			}
+
+			// --- What the column is. One decision, one kind. ---
+			kind := classifyField(f.Type(), isMultiCol)
+			if dbOpts.typ == "" {
+				switch kind {
+				case KindUnsupported:
+					return nil, fmt.Errorf("field %s: type %s maps to no column shape: it is not a primitive, time, value object, enum, or JSON container. Implement sql.Scanner + driver.Valuer, add a `db:\"...,type=...\"` override, or remove the db tag", f.Name(), goTypeStr)
+				case KindBytes:
+					return nil, fmt.Errorf("field %s: []byte columns are not supported: bytea/BLOB mapping is not implemented. Add a `db:\"...,type=bytea\"` override, wrap the field in a value object, or remove the db tag", f.Name())
 				}
-				if isMultiCol {
-					fi.IsMultiColVO = true
-					names := splitMultiColNames(rawDBTag(tag))
-					fi.MultiColNames = names
-					fi.MultiColPrefix = dbCol
-					if len(names) > 0 {
-						// Keep ColumnName as the first sub-column so columnFields()
-						// continues to include this field; the full set lives in
-						// MultiColNames. Options (unique/index/check) are NOT parsed
-						// for multi-col VOs — every segment is a column name.
-						fi.ColumnName = names[0]
-						fi.Unique = false
-						fi.Indexed = false
-						fi.IndexName = ""
-						fi.CheckExpr = ""
-					}
-					if hasDrelColumnTypes(f.Type()) {
-						fi.MultiColTypes = defaultMultiColTypes(names)
-					} else {
-						fi.MultiColTypes = defaultMultiColTypes(names)
-					}
+			}
+
+			switch kind {
+			case KindSingleColVO:
+				fi.IsVO = true
+				fi.VOBaseType = voBaseType(f.Type())
+				fi.HasEqual = hasMethod(f.Type(), "Equal")
+				fi.IsComparable = types.Comparable(voUnderlyingNamed(f.Type()))
+				fi.HasIsZero = hasMethod(f.Type(), "IsZero")
+			case KindMultiColVO:
+				fi.IsMultiColVO = true
+				names := splitMultiColNames(rawDBTag(tag))
+				fi.MultiColNames = names
+				fi.MultiColPrefix = dbCol
+				if len(names) > 0 {
+					// Keep ColumnName as the first sub-column so columnFields()
+					// continues to include this field; the full set lives in
+					// MultiColNames. Options (unique/index/check) are NOT parsed
+					// for multi-col VOs -- every segment is a column name.
+					fi.ColumnName = names[0]
+					fi.Unique = false
+					fi.Indexed = false
+					fi.IndexName = ""
+					fi.CheckExpr = ""
 				}
-				if !isPrimitiveType(goTypeStr) && !fi.IsVO && !isMultiCol {
-					enumValues, enumIsInt, enumBase := findEnumValues(f.Type())
-					if len(enumValues) > 0 {
-						fi.IsEnum = true
-						fi.EnumValues = enumValues
-						fi.EnumIsInt = enumIsInt
-						fi.EnumBaseType = enumBase
-					} else if enumBase != "" {
-						// Named type over a comparable basic kind (e.g. type Priority int)
-						// but with no declared const values -- not an enum, but still
-						// comparable and safe to use with != in generated diff code.
-						fi.IsNamedPrimitive = true
-					} else if isJSONContainer(f.Type()) {
-						fi.IsJSON = true
-						fi.IsArray = isSliceType(f.Type())
-					}
-				}
+				fi.MultiColTypes = defaultMultiColTypes(names)
+			case KindEnum:
+				fi.IsEnum = true
+				fi.EnumValues, fi.EnumIsInt, fi.EnumBaseType = findEnumValues(f.Type())
+			case KindNamedPrimitive:
+				// A named type over a comparable basic kind (e.g. type Priority
+				// int) with no declared constants. Not an enum, but comparable
+				// with != in the generated diff.
+				fi.IsNamedPrimitive = true
+			case KindJSON:
+				fi.IsJSON = true
+				fi.IsArray = isSliceType(f.Type())
 			}
 		}
 
