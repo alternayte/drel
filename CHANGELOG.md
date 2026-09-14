@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
-## [Unreleased]
+## [0.9.0] - 2026-09-14
 
 ### Added
 
@@ -25,6 +25,16 @@ minor versions may contain breaking changes.
   previously reached the emitter, or became a `jsonb` column by default.
 - A code-generation failure that produces invalid Go now quotes the emitted
   line, instead of reporting only a line, a column and a parser message.
+
+### Changed
+
+- A `[]byte` field is rejected with its own message. It was never supported —
+  `bytea`/`BLOB` mapping is not implemented — but it failed with the generic
+  unsupported-type error. Use `db:"...,type=bytea"` or a value object.
+- The column shape of a field is decided one time, by a closed set of kinds. The
+  rule it replaces ended in "any struct, slice, map or array is JSON", so a type
+  codegen did not recognise became a `jsonb` column. There is no default now: an
+  unrecognised type is rejected.
 
 ## [0.8.1] - 2026-09-14
 
@@ -594,6 +604,7 @@ Initial release: Postgres (pgx) core, code generation (model scanning, query
 builders, scan/snapshot/diff), basic CRUD, snapshot-based change tracking,
 implicit transactions, and the type-safe query builder.
 
+[0.9.0]: https://github.com/alternayte/drel/releases/tag/v0.9.0
 [0.8.1]: https://github.com/alternayte/drel/releases/tag/v0.8.1
 [0.8.0]: https://github.com/alternayte/drel/releases/tag/v0.8.0
 [0.7.1]: https://github.com/alternayte/drel/releases/tag/v0.7.1
