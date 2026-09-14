@@ -1,6 +1,9 @@
 package codegen
 
-import "go/types"
+import (
+	"go/types"
+	"strings"
+)
 
 func isScannerValuer(t types.Type) bool {
 	return hasMethod(t, "Scan") && hasMethod(t, "Value")
@@ -99,12 +102,31 @@ func isMapType(t types.Type) bool {
 	return ok
 }
 
+// isTimeType reports whether t is time.Time (after unwrapping a pointer). Its
+// underlying type is a struct, so every struct rule must exclude it: the
+// drivers map time.Time to a timestamp column natively.
+func isTimeType(t types.Type) bool {
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	pkg := named.Obj().Pkg()
+	return pkg != nil && pkg.Path() == "time" && named.Obj().Name() == "Time"
+}
+
 // isJSONContainer reports whether t is a slice, map, array, or plain struct that
 // should be mapped as a JSON column. []byte is excluded (it maps to bytea/BLOB,
-// handled as a primitive elsewhere if ever added).
+// handled as a primitive elsewhere if ever added). time.Time is excluded: it is
+// a struct, but the drivers map it to a timestamp column.
 func isJSONContainer(t types.Type) bool {
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
+	}
+	if isTimeType(t) {
+		return false
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Slice:
@@ -116,5 +138,81 @@ func isJSONContainer(t types.Type) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// pkgMarkPrefix/pkgMarkSuffix delimit a package-path placeholder inside a
+// rendered type string. A composite type such as []Fact can name types from
+// several packages, and the import alias of each one is only known when the
+// file is emitted, so the scanner writes a placeholder and the emitter
+// replaces it with the resolved alias.
+const (
+	pkgMarkPrefix = "\x00"
+	pkgMarkSuffix = "\x00"
+)
+
+func pkgMark(pkgPath string) string {
+	return pkgMarkPrefix + pkgPath + pkgMarkSuffix
+}
+
+// isUnnamedComposite reports whether t (after unwrapping a pointer) is a type
+// literal rather than a named type: []Fact, map[string]Fact, [3]Fact. Such a
+// type has no local name, so it must be rendered element by element.
+func isUnnamedComposite(t types.Type) bool {
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	if _, named := t.(*types.Named); named {
+		return false
+	}
+	switch t.(type) {
+	case *types.Slice, *types.Map, *types.Array:
+		return true
+	}
+	return false
+}
+
+// compositeTypeString renders an unnamed composite type as Go source. Types of
+// the owner package are unqualified; every other package is written as a
+// placeholder that resolvePkgMarks replaces with the file's import alias. It
+// also returns the import paths the rendered type needs.
+func compositeTypeString(t types.Type, ownerPkg string) (string, []string) {
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	var pkgs []string
+	seen := make(map[string]bool)
+	qualifier := func(p *types.Package) string {
+		if p == nil || p.Path() == ownerPkg {
+			return ""
+		}
+		if !seen[p.Path()] {
+			seen[p.Path()] = true
+			pkgs = append(pkgs, p.Path())
+		}
+		return pkgMark(p.Path())
+	}
+	return types.TypeString(t, qualifier), pkgs
+}
+
+// resolvePkgMarks replaces each package placeholder of a rendered composite
+// type with the import alias the emitted file uses for that package.
+func resolvePkgMarks(rendered string, alias func(pkgPath string) string) string {
+	var b strings.Builder
+	for {
+		start := strings.Index(rendered, pkgMarkPrefix)
+		if start < 0 {
+			b.WriteString(rendered)
+			return b.String()
+		}
+		rest := rendered[start+len(pkgMarkPrefix):]
+		end := strings.Index(rest, pkgMarkSuffix)
+		if end < 0 {
+			b.WriteString(rendered)
+			return b.String()
+		}
+		b.WriteString(rendered[:start])
+		b.WriteString(alias(rest[:end]))
+		rendered = rest[end+len(pkgMarkSuffix):]
 	}
 }

@@ -84,6 +84,13 @@ func GenerateModule(configPath, module string) error {
 		cfgDir = abs
 	}
 
+	// A config that declares an empty slice list describes an application with
+	// no feature yet. Write the aggregated DB file so the db package compiles,
+	// and scan nothing.
+	if cfg.NoSlices {
+		return writeDBFile(cfg, cfgDir, nil)
+	}
+
 	// Pre-scan stale removal: delete *_drel.go files from the package directories
 	// so that stale generated code (referencing deleted types) does not cause
 	// package-load errors in the subsequent ScanPackages call.
@@ -125,6 +132,10 @@ func GenerateModule(configPath, module string) error {
 		assignModules(models, cfg.ModuleList(), cfgDir)
 	}
 
+	// Give each enum type of a package to one model, so two models that share
+	// an enum do not both declare its Values()/IsValid() helpers.
+	assignEnumOwners(models)
+
 	// Validate the whole model set before touching disk: duplicate DB field
 	// names, unresolved relation targets, and column-less models all fail here
 	// so a bad input never leaves a half-generated tree.
@@ -150,14 +161,9 @@ func GenerateModule(configPath, module string) error {
 		intended[outPath] = true
 	}
 
-	dbPath := cfg.Output.DB
-	if !filepath.IsAbs(dbPath) {
-		dbPath = filepath.Join(cfgDir, dbPath)
-	}
-	dbPkgName := filepath.Base(filepath.Dir(dbPath))
-	dbContent, err := formatGenerated(EmitDBFile(models, dbPkgName))
+	dbPath, dbContent, err := renderDBFile(cfg, cfgDir, models)
 	if err != nil {
-		return fmt.Errorf("codegen: format db file %s: %w", dbPath, err)
+		return err
 	}
 	files = append(files, emitted{path: dbPath, content: dbContent})
 
@@ -192,6 +198,33 @@ func GenerateModule(configPath, module string) error {
 		return err
 	}
 
+	return nil
+}
+
+// renderDBFile emits and formats the aggregated DB file, returning its absolute
+// path and its content. It writes nothing.
+func renderDBFile(cfg *Config, cfgDir string, models []ModelInfo) (string, string, error) {
+	dbPath := cfg.Output.DB
+	if !filepath.IsAbs(dbPath) {
+		dbPath = filepath.Join(cfgDir, dbPath)
+	}
+	dbPkgName := filepath.Base(filepath.Dir(dbPath))
+	content, err := formatGenerated(EmitDBFile(models, dbPkgName))
+	if err != nil {
+		return "", "", fmt.Errorf("codegen: format db file %s: %w", dbPath, err)
+	}
+	return dbPath, content, nil
+}
+
+// writeDBFile renders the aggregated DB file and writes it to disk.
+func writeDBFile(cfg *Config, cfgDir string, models []ModelInfo) error {
+	dbPath, content, err := renderDBFile(cfg, cfgDir, models)
+	if err != nil {
+		return err
+	}
+	if err := atomicWrite(dbPath, content); err != nil {
+		return fmt.Errorf("codegen: write %s: %w", dbPath, err)
+	}
 	return nil
 }
 

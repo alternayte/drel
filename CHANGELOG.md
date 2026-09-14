@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- A `time.Time` model field now maps to a timestamp column. It became a `jsonb`
+  column, and the generated scan wrapped it in `drel.JSON[T]`, because the JSON
+  container rule accepted every struct.
+- Two models of one package that share an enum type now compile. Each generated
+  file declared `Values()` and `IsValid()` for the shared type, so the package
+  held duplicate declarations. Codegen now gives each enum type to one model of
+  the package.
+- A model field whose type is a slice, map, or array of a type declared in the
+  model package now generates. The rendered type carried the full import path,
+  for example `[]example.com/app/quests.Fact`, and gofmt rejected the file.
+  Composite field types are now rendered element by element, with same-package
+  elements unqualified and foreign ones qualified by the file's import alias.
+- A `drel.yaml` that declares an empty `packages:` or `modules:` list is now
+  valid. It describes an application with no feature slice yet: codegen writes
+  the aggregated DB file and scans no package. A file that declares neither key
+  is still rejected.
+
 ## [0.8.0] - 2026-09-10
 
 ### Added

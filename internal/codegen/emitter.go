@@ -48,10 +48,19 @@ func fieldDisplayType(f FieldInfo, aliases map[string]string) string {
 		return qualified
 	}
 	if f.LocalGoType != "" {
-		if f.IsPointer {
-			return "*" + f.LocalGoType
+		name := f.LocalGoType
+		if len(f.TypeRefPkgs) > 0 {
+			name = resolvePkgMarks(name, func(pkgPath string) string {
+				if a, ok := aliases[pkgPath]; ok {
+					return a
+				}
+				return path.Base(pkgPath)
+			})
 		}
-		return f.LocalGoType
+		if f.IsPointer {
+			return "*" + name
+		}
+		return name
 	}
 	return f.GoType
 }
@@ -203,6 +212,9 @@ func buildModelImportAliases(m ModelInfo) map[string]string {
 		if f.TypePkgPath != "" {
 			addPkg(f.TypePkgPath)
 		}
+		for _, p := range f.TypeRefPkgs {
+			addPkg(p)
+		}
 	}
 	return aliases
 }
@@ -225,6 +237,11 @@ func emitImports(b *strings.Builder, m ModelInfo, extAliases map[string]string) 
 	for _, f := range columnFields(m.Fields) {
 		if f.TypePkgPath == "time" {
 			stdImports["time"] = true
+		}
+		for _, p := range f.TypeRefPkgs {
+			if p == "time" {
+				stdImports["time"] = true
+			}
 		}
 		if f.IsMultiColVO {
 			stdImports["fmt"] = true
@@ -463,11 +480,15 @@ func emitEnumValidators(b *strings.Builder, m ModelInfo) {
 		if !f.IsEnum || len(f.EnumValues) == 0 {
 			continue
 		}
+		key := enumTypeKey(f)
+		if m.EnumOwners != nil && !m.EnumOwners[key] {
+			continue // another model of this package declares the helpers
+		}
 		typeName := f.LocalGoType
-		if seen[typeName] {
+		if seen[key] {
 			continue
 		}
-		seen[typeName] = true
+		seen[key] = true
 
 		lits := make([]string, len(f.EnumValues))
 		for i, v := range f.EnumValues {

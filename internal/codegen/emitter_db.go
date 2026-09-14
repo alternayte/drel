@@ -120,7 +120,13 @@ func EmitDBFile(models []ModelInfo, dbPkgName string) string {
 	b.WriteString("// Tx returns the tracked repositories bound to the transaction in ctx.\n")
 	b.WriteString("// It panics if no transaction is present, so wrap the call in WithTx.\n")
 	b.WriteString("func (db *DB) Tx(ctx context.Context) TxRepos {\n")
-	b.WriteString("\ttx := drel.MustFromContext(ctx)\n")
+	if len(models) == 0 {
+		// No repository uses tx, so name it nothing: the call still asserts
+		// that a transaction is present.
+		b.WriteString("\t_ = drel.MustFromContext(ctx)\n")
+	} else {
+		b.WriteString("\ttx := drel.MustFromContext(ctx)\n")
+	}
 	b.WriteString("\treturn TxRepos{\n")
 	for _, m := range models {
 		alias := aliases[m.PkgPath]

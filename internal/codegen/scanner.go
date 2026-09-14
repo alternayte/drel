@@ -403,6 +403,14 @@ func extractFields(st *types.Struct, ownerPkgPath string) ([]FieldInfo, error) {
 			goTypeStr := f.Type().String()
 			if isPrimitiveType(goTypeStr) {
 				fi.LocalGoType = goTypeStr
+			} else if isUnnamedComposite(f.Type()) {
+				// A type literal such as []Fact has no name to qualify: render
+				// it element by element so same-package elements stay
+				// unqualified and foreign ones carry a resolvable placeholder.
+				fi.LocalGoType, fi.TypeRefPkgs = compositeTypeString(f.Type(), ownerPkgPath)
+				fi.IsPointer = isPointerType(f.Type())
+				fi.IsJSON = isJSONContainer(f.Type())
+				fi.IsArray = isSliceType(f.Type())
 			} else {
 				fi.LocalGoType = localTypeName(f.Type())
 				fieldPkg := typePkgPath(f.Type())

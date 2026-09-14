@@ -24,6 +24,13 @@ type ModelInfo struct {
 	Key []KeyColumn
 	// KeyIsStruct reports whether the key type argument is a struct.
 	KeyIsStruct bool
+	// EnumOwners names the enum types whose Values()/IsValid() helpers this
+	// model's generated file declares. Two models of one package that share an
+	// enum type must not declare the helpers two times, so assignEnumOwners
+	// gives each enum type to exactly one model of the package. A nil map means
+	// the model owns every enum it uses, which is the case when a caller emits
+	// one model on its own.
+	EnumOwners map[string]bool
 }
 
 // KeyColumn is one column of a model's primary key.
@@ -61,22 +68,26 @@ type FieldInfo struct {
 	// RenamedFrom, when set, is this column's previous name. The migration
 	// differ turns it into an ALTER TABLE ... RENAME COLUMN rather than a drop
 	// and an add.
-	RenamedFrom      string
-	IsExported       bool
-	RelTag           string
-	Relation         *RelationFieldInfo
-	IsVO             bool     // implements sql.Scanner + driver.Valuer (single-column VO)
-	VOBaseType       string   // single-column VO: underlying basic Go type (e.g. "string", "int64"); empty if not derivable
-	HasEqual         bool     // single-column VO defines an Equal(T) bool method usable for diffing
-	IsComparable     bool     // single-column VO's Go type is comparable with == / != (types.Comparable)
-	HasIsZero        bool     // single-column VO defines IsZero() bool, enabling the zero<->NULL bridge
-	IsMultiColVO     bool     // implements drel.MultiColumnMapper (multi-column VO)
-	MultiColPrefix   string   // db tag used as column prefix for multi-column VOs
-	MultiColNames    []string // expanded sub-column names from the db tag (multi-column VOs)
-	MultiColTypes    []string // resolved SQL types per sub-column (default "text"; multi-column VOs)
-	LocalGoType      string   // type name without package qualifier, for same-package generated code
-	TypePkgPath      string   // import path of the field type's package (empty for primitives/same-package)
-	IsPointer        bool     // whether the field is a pointer type
+	RenamedFrom    string
+	IsExported     bool
+	RelTag         string
+	Relation       *RelationFieldInfo
+	IsVO           bool     // implements sql.Scanner + driver.Valuer (single-column VO)
+	VOBaseType     string   // single-column VO: underlying basic Go type (e.g. "string", "int64"); empty if not derivable
+	HasEqual       bool     // single-column VO defines an Equal(T) bool method usable for diffing
+	IsComparable   bool     // single-column VO's Go type is comparable with == / != (types.Comparable)
+	HasIsZero      bool     // single-column VO defines IsZero() bool, enabling the zero<->NULL bridge
+	IsMultiColVO   bool     // implements drel.MultiColumnMapper (multi-column VO)
+	MultiColPrefix string   // db tag used as column prefix for multi-column VOs
+	MultiColNames  []string // expanded sub-column names from the db tag (multi-column VOs)
+	MultiColTypes  []string // resolved SQL types per sub-column (default "text"; multi-column VOs)
+	LocalGoType    string   // type name without package qualifier, for same-package generated code
+	TypePkgPath    string   // import path of the field type's package (empty for primitives/same-package)
+	// TypeRefPkgs lists the import paths an unnamed composite type refers to,
+	// e.g. []time.Time needs "time". LocalGoType then holds placeholders that
+	// the emitter replaces with the file's import aliases.
+	TypeRefPkgs      []string
+	IsPointer        bool // whether the field is a pointer type
 	IsEnum           bool
 	EnumValues       []string
 	EnumIsInt        bool   // enum's underlying basic kind is integer (not string)

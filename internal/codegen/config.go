@@ -29,6 +29,12 @@ type Config struct {
 	// Seed is an optional path to a Go main package that seeds the database.
 	// `drel seed` runs it with `go run`, passing through DATABASE_URL.
 	Seed string `yaml:"seed"`
+
+	// NoSlices records that the file declares an empty packages or modules
+	// list. An application with no feature slice yet is a valid state: codegen
+	// writes the aggregated DB file and generates no model. It differs from a
+	// file that declares neither key, which is a mistake.
+	NoSlices bool `yaml:"-"`
 }
 
 type OutputConfig struct {
@@ -53,7 +59,10 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("codegen: config %s: set packages or modules, not both", path)
 	}
 	if len(cfg.Packages) == 0 && len(cfg.Modules) == 0 {
-		return nil, fmt.Errorf("codegen: config %s: no packages specified", path)
+		if cfg.Packages == nil && cfg.Modules == nil {
+			return nil, fmt.Errorf("codegen: config %s: no packages specified", path)
+		}
+		cfg.NoSlices = true
 	}
 
 	seen := make(map[string]bool)
@@ -88,6 +97,9 @@ func LoadConfig(path string) (*Config, error) {
 // instead of modules describes one module named "default", so every caller
 // works with one shape.
 func (c *Config) ModuleList() []ModuleConfig {
+	if c.NoSlices {
+		return nil
+	}
 	if len(c.Modules) == 0 {
 		return []ModuleConfig{{
 			Name:       DefaultModuleName,
