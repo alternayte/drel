@@ -288,3 +288,12 @@ func TestCodegenConformance_RejectsUnmappableTypes(t *testing.T) {
 		})
 	}
 }
+
+// A formatting error names the emitted line. gofmt reports only a position, and
+// a rendering bug in the emitter is unreadable without the source line.
+func TestFormatGenerated_QuotesOffendingLine(t *testing.T) {
+	_, err := formatGenerated("package p\n\nvar x drel.JSON[[]example.com/app.Fact]\n")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "emitted line 3")
+	assert.Contains(t, err.Error(), "drel.JSON[[]example.com/app.Fact]")
+}

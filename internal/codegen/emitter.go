@@ -48,15 +48,15 @@ func fieldDisplayType(f FieldInfo, aliases map[string]string) string {
 		return qualified
 	}
 	if f.LocalGoType != "" {
-		name := f.LocalGoType
-		if len(f.TypeRefPkgs) > 0 {
-			name = resolvePkgMarks(name, func(pkgPath string) string {
-				if a, ok := aliases[pkgPath]; ok {
-					return a
-				}
-				return path.Base(pkgPath)
-			})
-		}
+		// An unnamed composite type carries a placeholder per foreign package
+		// (see compositeTypeString); a named type carries its package in
+		// TypePkgPath, handled above. The two are exclusive.
+		name := resolvePkgMarks(f.LocalGoType, func(pkgPath string) string {
+			if a, ok := aliases[pkgPath]; ok {
+				return a
+			}
+			return path.Base(pkgPath)
+		})
 		if f.IsPointer {
 			return "*" + name
 		}

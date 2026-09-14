@@ -1,8 +1,10 @@
 package codegen
 
 import (
+	"errors"
 	"fmt"
 	"go/format"
+	"go/scanner"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,12 +232,30 @@ func writeDBFile(cfg *Config, cfgDir string, models []ModelInfo) error {
 
 // formatGenerated gofmt-formats generated source. It performs no disk I/O; on a
 // formatting error nothing is written by the caller and the error is returned.
+//
+// A formatting error means the emitter wrote invalid Go. gofmt reports only a
+// line, a column and a parser message, which names neither the field nor the
+// type at fault, so the offending source line is quoted into the error.
 func formatGenerated(content string) (string, error) {
 	formatted, err := format.Source([]byte(content))
 	if err != nil {
-		return "", err
+		return "", withSourceLine(err, content)
 	}
 	return string(formatted), nil
+}
+
+// withSourceLine appends the emitted line that a parser error points at.
+func withSourceLine(err error, content string) error {
+	var list scanner.ErrorList
+	if !errors.As(err, &list) || len(list) == 0 {
+		return err
+	}
+	line := list[0].Pos.Line
+	lines := strings.Split(content, "\n")
+	if line < 1 || line > len(lines) {
+		return err
+	}
+	return fmt.Errorf("%w\n\temitted line %d: %s", err, line, strings.TrimSpace(lines[line-1]))
 }
 
 // atomicWrite writes content to path via a temp file in the same directory
