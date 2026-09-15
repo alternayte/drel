@@ -24,6 +24,8 @@ jobs:
           fi
       - run: go vet ./...
       - run: go build ./...
+      - name: go.mod and go.sum are tidy
+        run: ./checks/go-mod-tidy.sh
 
   generated:
     runs-on: ubuntu-latest
