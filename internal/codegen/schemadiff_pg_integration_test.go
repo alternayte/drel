@@ -193,3 +193,107 @@ func TestDiffSchemas_TypeChangeWithEmptyStrings(t *testing.T) {
 	require.NoError(t, drv.QueryRow(ctx, "SELECT to_state::text FROM quest_events WHERE to_state IS NOT NULL").Scan(&state))
 	assert.Equal(t, "draft", state)
 }
+
+// TestDeclaredObjects_ApplyToRealPostgres declares a foreign key to a table
+// drel does not model, a partial unique index, and a composite index covering a
+// trait column, then applies the result. All three were hand-written before.
+func TestDeclaredObjects_ApplyToRealPostgres(t *testing.T) {
+	ctx := context.Background()
+	drv := pgDriver(t)
+
+	// A table another system owns. drel has no model for it.
+	_, err := drv.Exec(ctx, `CREATE TABLE auth_users (id text PRIMARY KEY)`)
+	require.NoError(t, err)
+	_, err = drv.Exec(ctx, `INSERT INTO auth_users (id) VALUES ('u1')`)
+	require.NoError(t, err)
+
+	quests := []codegen.ModelInfo{{
+		Name: "Quest", TableName: "quests", PKType: "int",
+		Fields: []codegen.FieldInfo{
+			{
+				Name: "UserID", GoType: "string", ColumnName: "user_id", IsExported: true,
+				References: "auth_users", RefColumn: "id", OnDelete: "CASCADE",
+				IndexNames: []codegen.IndexMembership{
+					{Name: "uq_quest_active", Unique: true, Where: "state = 'active'"},
+				},
+			},
+			{Name: "State", GoType: "string", ColumnName: "state", IsExported: true},
+		},
+		Indexes: []codegen.IndexDecl{
+			{Name: "idx_quest_user_created", Columns: []string{"user_id", "created_at"}},
+		},
+	}}
+
+	_, err = drv.Exec(ctx, codegen.GenerateSchema(quests, "postgres"))
+	require.NoError(t, err, "schema with a declared FK and indexes should apply")
+
+	// The foreign key is enforced.
+	_, err = drv.Exec(ctx, `INSERT INTO quests (user_id, state) VALUES ('nobody', 'active')`)
+	assert.Error(t, err, "foreign key should reject an unknown user")
+
+	_, err = drv.Exec(ctx, `INSERT INTO quests (user_id, state) VALUES ('u1', 'active')`)
+	require.NoError(t, err)
+
+	// The partial unique index allows a second non-active row, and only one
+	// active row per user.
+	_, err = drv.Exec(ctx, `INSERT INTO quests (user_id, state) VALUES ('u1', 'done')`)
+	require.NoError(t, err, "a non-active row is outside the partial index")
+	_, err = drv.Exec(ctx, `INSERT INTO quests (user_id, state) VALUES ('u1', 'active')`)
+	assert.Error(t, err, "partial unique index should reject a second active quest")
+
+	// ON DELETE CASCADE reaches the rows.
+	_, err = drv.Exec(ctx, `DELETE FROM auth_users WHERE id = 'u1'`)
+	require.NoError(t, err)
+	var left int
+	require.NoError(t, drv.QueryRow(ctx, "SELECT count(*) FROM quests").Scan(&left))
+	assert.Equal(t, 0, left, "ON DELETE CASCADE should remove the quests")
+
+	// The composite index covering the trait column exists.
+	var idxCount int
+	require.NoError(t, drv.QueryRow(ctx,
+		`SELECT count(*) FROM pg_indexes WHERE tablename = 'quests' AND indexname = 'idx_quest_user_created'`).Scan(&idxCount))
+	assert.Equal(t, 1, idxCount)
+}
+
+// TestDeclaredForeignKey_AddedToExistingTable declares a foreign key on a table
+// that already exists, which is how a project adopts references= for a key it
+// wrote by hand.
+func TestDeclaredForeignKey_AddedToExistingTable(t *testing.T) {
+	ctx := context.Background()
+	drv := pgDriver(t)
+
+	_, err := drv.Exec(ctx, `CREATE TABLE auth_users (id text PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	v1 := []codegen.ModelInfo{{
+		Name: "Quest", TableName: "quests", PKType: "int",
+		Fields: []codegen.FieldInfo{{Name: "UserID", GoType: "string", ColumnName: "user_id", IsExported: true}},
+	}}
+	_, err = drv.Exec(ctx, codegen.GenerateSchema(v1, "postgres"))
+	require.NoError(t, err)
+
+	v2 := []codegen.ModelInfo{{
+		Name: "Quest", TableName: "quests", PKType: "int",
+		Fields: []codegen.FieldInfo{{
+			Name: "UserID", GoType: "string", ColumnName: "user_id", IsExported: true,
+			References: "auth_users", RefColumn: "id", OnDelete: "CASCADE",
+		}},
+	}}
+
+	up, down, err := codegen.DiffSchemas(codegen.BuildSchema(v1, "postgres"), codegen.BuildSchema(v2, "postgres"), "postgres")
+	require.NoError(t, err)
+	require.NotEmpty(t, up, "declaring a foreign key must emit SQL")
+
+	_, err = drv.Exec(ctx, up)
+	require.NoError(t, err, "up migration should apply:\n%s", up)
+
+	_, err = drv.Exec(ctx, `INSERT INTO quests (user_id) VALUES ('nobody')`)
+	assert.Error(t, err, "the added foreign key should be enforced")
+
+	// Applying the up a second time is safe: the drop is guarded.
+	_, err = drv.Exec(ctx, up)
+	require.NoError(t, err, "the migration should be repeatable:\n%s", up)
+
+	_, err = drv.Exec(ctx, down)
+	require.NoError(t, err, "down migration should apply:\n%s", down)
+}

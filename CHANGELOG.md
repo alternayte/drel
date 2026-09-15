@@ -7,6 +7,29 @@ minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Foreign keys are declarable: `db:"user_id,references=auth_users.id"` points at
+  any table, including one drel does not model, with `on_delete=`, `on_update=`
+  and `deferrable`. The differ emits `ADD CONSTRAINT` / `DROP CONSTRAINT` for a
+  key declared on an existing column; it previously ignored the reference, and
+  only a `rel:"belongs_to"` to a model in the same scan produced a key at all.
+- Partial indexes: `db:"state,unique_index=uq_active(state = 'active')"` emits
+  `CREATE UNIQUE INDEX ... WHERE state = 'active'`.
+- `index=` and `unique_index=` are repeatable, so a column joins as many named
+  indexes as it needs. A column could join only one before.
+- An index declared on the embedded `drel.Model` names its columns explicitly:
+  `db:"index=idx_recent[user_id,created_at]"`. This is the only way to index a
+  trait column such as `created_at`, which has no Go field to tag.
+- An index whose columns, uniqueness or predicate change is dropped and
+  recreated. The differ compared names only, so a reshaped index never changed.
+
+### Changed
+
+- Generated `CREATE INDEX` carries `IF NOT EXISTS`, and `DROP INDEX` carries
+  `IF EXISTS`, so declaring an index a project created by hand does not fail on
+  the duplicate.
+
 ### Fixed
 
 - A column type change now carries the `USING` clause PostgreSQL needs. A field

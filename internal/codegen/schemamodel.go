@@ -45,6 +45,14 @@ type Column struct {
 	Ref     string `json:"ref,omitempty"`
 	PK      bool   `json:"pk,omitempty"`
 
+	// Foreign key detail. Ref names the referenced table; RefColumn names the
+	// referenced column and defaults to "id" when empty. The actions are stored
+	// in SQL form ("CASCADE", "SET NULL", ...).
+	RefColumn  string `json:"refColumn,omitempty"`
+	OnDelete   string `json:"onDelete,omitempty"`
+	OnUpdate   string `json:"onUpdate,omitempty"`
+	Deferrable bool   `json:"deferrable,omitempty"`
+
 	// RenamedFrom is the column's previous name. Diff-time only; see Table.
 	RenamedFrom string `json:"-"`
 }
@@ -54,6 +62,25 @@ type Index struct {
 	Name    string   `json:"name"`
 	Columns []string `json:"columns"`
 	Unique  bool     `json:"unique,omitempty"`
+	// Where is a partial-index predicate. An index with a predicate covers only
+	// the rows that satisfy it, which is how a "one active row per user" rule is
+	// expressed as a unique index.
+	Where string `json:"where,omitempty"`
+}
+
+// SameShape reports whether two indexes describe the same object. The differ
+// compares shape, not only name: an index whose columns, uniqueness or
+// predicate changed must be dropped and recreated.
+func (i Index) SameShape(o Index) bool {
+	if i.Name != o.Name || i.Unique != o.Unique || i.Where != o.Where || len(i.Columns) != len(o.Columns) {
+		return false
+	}
+	for n := range i.Columns {
+		if i.Columns[n] != o.Columns[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // EnumDef describes an enum type. Name is the lower-cased local Go type name.
@@ -279,6 +306,17 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 				c.Ref = target
 			}
 		}
+		// An explicit references= tag wins over a relation-derived FK, and is
+		// the only way to point at a table drel does not model.
+		if f.References != "" {
+			c.Ref = f.References
+		}
+		if c.Ref != "" {
+			c.RefColumn = f.RefColumn
+			c.OnDelete = f.OnDelete
+			c.OnUpdate = f.OnUpdate
+			c.Deferrable = f.Deferrable
+		}
 
 		t.Columns = append(t.Columns, c)
 	}
@@ -316,40 +354,47 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 	return t
 }
 
-// buildIndexes derives indexes from db tag options on a model's columns.
+// buildIndexes derives a table's indexes from the db tag options on its columns
+// and from the indexes declared on the model itself.
 //
-//   - Fields sharing an explicit IndexName compose ONE index, columns ordered by
-//     field declaration order. The composite is unique if ANY member is marked
-//     unique.
+//   - Fields sharing a named index compose ONE index, columns ordered by field
+//     declaration order. A field may join several named indexes.
 //   - A field marked Indexed without an explicit name gets a single-column index
 //     auto-named idx_<table>_<col>.
-//   - A field marked unique (without an explicit index name) gets a unique
-//     single-column index uq_<table>_<col>. A unique field that also belongs to a
-//     named index does not get a separate uq_ index (the named index carries the
-//     uniqueness).
+//   - A field marked unique (and joining no named index) gets a unique
+//     single-column index uq_<table>_<col>. A unique field that joins a named
+//     index does not also get a uq_ index: the named index carries it.
+//   - A model-level declaration names its columns explicitly and in order, so it
+//     can index a trait column such as created_at, which has no Go field.
 //
 // Indexes are returned sorted by name for determinism.
 func buildIndexes(m ModelInfo) []Index {
 	type group struct {
 		columns []string
 		unique  bool
+		where   string
 	}
 	named := map[string]*group{}
 	var namedOrder []string
 	var indexes []Index
 
 	for _, f := range columnFields(m.Fields) {
-		if f.IndexName != "" {
-			g, ok := named[f.IndexName]
+		for _, mem := range f.IndexNames {
+			g, ok := named[mem.Name]
 			if !ok {
 				g = &group{}
-				named[f.IndexName] = g
-				namedOrder = append(namedOrder, f.IndexName)
+				named[mem.Name] = g
+				namedOrder = append(namedOrder, mem.Name)
 			}
 			g.columns = append(g.columns, f.ColumnName)
-			if f.Unique {
+			if mem.Unique {
 				g.unique = true
 			}
+			if mem.Where != "" {
+				g.where = mem.Where
+			}
+		}
+		if len(f.IndexNames) > 0 {
 			continue
 		}
 		if f.Indexed {
@@ -369,7 +414,23 @@ func buildIndexes(m ModelInfo) []Index {
 
 	for _, name := range namedOrder {
 		g := named[name]
-		indexes = append(indexes, Index{Name: name, Columns: g.columns, Unique: g.unique})
+		indexes = append(indexes, Index{Name: name, Columns: g.columns, Unique: g.unique, Where: g.where})
+	}
+
+	// A model-level declaration replaces a field-derived index of the same name,
+	// because it states the column order explicitly.
+	for _, d := range m.Indexes {
+		replaced := false
+		for i := range indexes {
+			if indexes[i].Name == d.Name {
+				indexes[i] = Index{Name: d.Name, Columns: d.Columns, Unique: d.Unique, Where: d.Where}
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			indexes = append(indexes, Index{Name: d.Name, Columns: d.Columns, Unique: d.Unique, Where: d.Where})
+		}
 	}
 
 	sort.Slice(indexes, func(i, j int) bool { return indexes[i].Name < indexes[j].Name })

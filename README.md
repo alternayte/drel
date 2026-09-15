@@ -188,6 +188,41 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   once its migration is generated. An ambiguous marker (the old name is still
   in use, or two columns claim the same old name) fails migration generation
   rather than guess.
+- **Declared schema objects** -- foreign keys and indexes are declared on the
+  model, so they survive `drel migrate new` instead of living in a hand-written
+  migration that the differ cannot see:
+
+  ```go
+  type Quest struct {
+      drel.Model[int] `db:"index=idx_quest_recent[user_id,created_at]"`
+
+      // A foreign key to a table drel does not model, with referential actions.
+      userID string `db:"user_id,references=auth_users.id,on_delete=cascade"`
+
+      // One field may join several named indexes. A predicate makes the index
+      // partial, which is how "one active quest per user" is expressed.
+      state string `db:"state,index=idx_quest_user_state,unique_index=uq_quest_active(state = 'active')"`
+
+      day time.Time `db:"day,type=date"`
+  }
+  ```
+
+  - `references=<table>[.<column>]` points at any table, including one another
+    system owns; the column defaults to `id`. `on_delete=` and `on_update=` take
+    `cascade`, `restrict`, `set_null`, `set_default` or `no_action`, and
+    `deferrable` emits `DEFERRABLE INITIALLY DEFERRED`. A `rel:"belongs_to"`
+    still derives a key on its own; `references=` is for everything else.
+  - `index=<name>` and `unique_index=<name>` are repeatable: a column joins as
+    many indexes as it needs, and columns sharing a name compose one index in
+    field order. `<name>(<predicate>)` makes it partial.
+  - An index declared on the embedded `drel.Model` names its columns explicitly,
+    as `index=<name>[col_a,col_b]`. This is the only way to index a trait column
+    such as `created_at`, which has no Go field to tag.
+  - `type=` sets the SQL type directly, for a shape Go does not distinguish:
+    `type=date` on a `time.Time` field stores a date rather than a timestamp.
+
+  Generated `CREATE INDEX` carries `IF NOT EXISTS`, so declaring an index a
+  project created by hand does not fail on the duplicate.
 - **Read replicas** -- `WithReadReplica` round-robins reads; writes and
   transactions use the primary; `Primary()` forces read-your-writes.
 - **Query batching** -- `NewBatch` + `BatchAll`/`BatchFirst`/`BatchCount`

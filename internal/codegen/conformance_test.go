@@ -189,6 +189,22 @@ type Everything struct {
 	// db tag options.
 	slug  string ` + "`db:\"slug,index\"`" + `
 	notes string ` + "`db:\"notes,default='none'\"`" + `
+	day   time.Time ` + "`db:\"day,type=date\"`" + `
+
+	// A foreign key to a table drel does not model, with referential actions.
+	ownerID string ` + "`db:\"owner_id,references=auth_users.id,on_delete=cascade,on_update=restrict,deferrable\"`" + `
+
+	// One field joining two named indexes, one of them a partial unique index.
+	userID int ` + "`db:\"user_id,index=idx_everything_user_state,unique_index=uq_everything_active(state = 'draft')\"`" + `
+	tag    string ` + "`db:\"tag,index=idx_everything_user_state\"`" + `
+}
+
+// Indexed declares an index on the model, which is the only way to cover a
+// trait column such as created_at.
+type Indexed struct {
+	drel.Model[int] ` + "`db:\"index=idx_indexed_recent[owner,created_at],unique_index=uq_indexed_live[owner](live)\"`" + `
+	owner           string ` + "`db:\"owner\"`" + `
+	live            bool   ` + "`db:\"live\"`" + `
 }
 
 // Shared declares the same enum type as Everything. Only one of the two
@@ -246,6 +262,18 @@ func TestCodegenConformance(t *testing.T) {
 	// method on a non-local type. The column still carries the value set.
 	assert.NotContains(t, both, "func (r Tier) IsValid()")
 	assert.NotContains(t, both, "func TierValues()")
+
+	// A foreign key, a partial unique index and a model-level index reach the
+	// schema. They are declarations, not generated Go, so the DDL is the proof.
+	models, err := ScanPackages([]string{"./shapes"}, dir)
+	require.NoError(t, err)
+	ddl := GenerateSchema(models, "postgres")
+	assert.Contains(t, ddl, `REFERENCES "auth_users"("id") ON DELETE CASCADE ON UPDATE RESTRICT DEFERRABLE INITIALLY DEFERRED`)
+	assert.Contains(t, ddl, `CREATE UNIQUE INDEX IF NOT EXISTS "uq_everything_active" ON "everythings" ("user_id") WHERE state = 'draft';`)
+	assert.Contains(t, ddl, `CREATE INDEX IF NOT EXISTS "idx_everything_user_state" ON "everythings" ("user_id", "tag");`)
+	assert.Contains(t, ddl, `CREATE INDEX IF NOT EXISTS "idx_indexed_recent" ON "indexeds" ("owner", "created_at");`)
+	assert.Contains(t, ddl, `CREATE UNIQUE INDEX IF NOT EXISTS "uq_indexed_live" ON "indexeds" ("owner") WHERE live;`)
+	assert.Contains(t, ddl, `"day" date`)
 
 	// The package compiles. This is the assertion that catches a rendering bug
 	// the string assertions above do not name.

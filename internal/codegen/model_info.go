@@ -24,6 +24,10 @@ type ModelInfo struct {
 	Key []KeyColumn
 	// KeyIsStruct reports whether the key type argument is a struct.
 	KeyIsStruct bool
+	// Indexes are declared on the model rather than derived from a field, so
+	// they can name any column -- including a trait column such as created_at,
+	// which has no Go field to tag.
+	Indexes []IndexDecl
 	// EnumOwners names the enum types whose Values()/IsValid() helpers this
 	// model's generated file declares. Two models of one package that share an
 	// enum type must not declare the helpers two times, so assignEnumOwners
@@ -95,12 +99,41 @@ type FieldInfo struct {
 	IsNamedPrimitive bool   // named type over a comparable basic kind with no enum consts (e.g. type Priority int)
 	Unique           bool   // db tag option: unique index on this column
 	Indexed          bool   // db tag option: index on this column
-	IndexName        string // explicit index name (db:"...,index=name"); fields sharing a name form a composite index
-	CheckExpr        string // db tag option: column CHECK constraint expression (db:"...,check=expr")
-	Default          string // db tag option: column DEFAULT value (db:"...,default=expr")
-	TypeOverride     string // db tag option: explicit SQL type (db:"...,type=jsonb"); overrides inference
-	IsJSON           bool   // map/slice/struct mapped as JSON/jsonb (default for non-primitive, non-VO, non-enum container types)
-	IsArray          bool   // slice field (JSON array by default; native T[] when TypeOverride is set on Postgres)
+	// IndexNames lists the named indexes this column joins. A field may join
+	// several: `db:"user_id,index=idx_a,index=idx_b"`. Fields sharing a name
+	// compose one index, ordered by field declaration order.
+	IndexNames []IndexMembership
+	// References names the table this column points at, for a foreign key
+	// declared with `db:"...,references=table[.column]"`. The target needs no
+	// drel model, so a column can reference a table another system owns.
+	References   string
+	RefColumn    string // referenced column; "id" when the tag omits it
+	OnDelete     string // ON DELETE action, already in SQL form (e.g. "CASCADE")
+	OnUpdate     string // ON UPDATE action, already in SQL form
+	Deferrable   bool   // emit DEFERRABLE INITIALLY DEFERRED
+	CheckExpr    string // db tag option: column CHECK constraint expression (db:"...,check=expr")
+	Default      string // db tag option: column DEFAULT value (db:"...,default=expr")
+	TypeOverride string // db tag option: explicit SQL type (db:"...,type=jsonb"); overrides inference
+	IsJSON       bool   // map/slice/struct mapped as JSON/jsonb (default for non-primitive, non-VO, non-enum container types)
+	IsArray      bool   // slice field (JSON array by default; native T[] when TypeOverride is set on Postgres)
+}
+
+// IndexMembership is one named index a column joins. Unique and Where are
+// declared on any member; a composite index takes them from whichever member
+// declares them, and a conflict is rejected at scan time.
+type IndexMembership struct {
+	Name   string
+	Unique bool
+	Where  string // partial-index predicate; empty for a full index
+}
+
+// IndexDecl is an index declared on the model, with its columns named
+// explicitly and in order.
+type IndexDecl struct {
+	Name    string
+	Columns []string
+	Unique  bool
+	Where   string
 }
 
 // RelationFieldInfo holds parsed relationship metadata from a `rel:"..."` struct tag.

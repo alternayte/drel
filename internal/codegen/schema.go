@@ -158,7 +158,20 @@ func columnDefSQL(c Column, dialect string) string {
 		b.WriteString(fmt.Sprintf(" CHECK(%s)", c.Check))
 	}
 	if c.Ref != "" {
-		b.WriteString(fmt.Sprintf(" REFERENCES %s(%s)", quoteIdent(c.Ref), quoteIdent("id")))
+		refCol := c.RefColumn
+		if refCol == "" {
+			refCol = "id"
+		}
+		b.WriteString(fmt.Sprintf(" REFERENCES %s(%s)", quoteIdent(c.Ref), quoteIdent(refCol)))
+		if c.OnDelete != "" {
+			b.WriteString(" ON DELETE " + c.OnDelete)
+		}
+		if c.OnUpdate != "" {
+			b.WriteString(" ON UPDATE " + c.OnUpdate)
+		}
+		if c.Deferrable {
+			b.WriteString(" DEFERRABLE INITIALLY DEFERRED")
+		}
 	}
 	if c.Default != "" {
 		b.WriteString(fmt.Sprintf(" DEFAULT %s", c.Default))
@@ -176,8 +189,60 @@ func createIndexSQL(table string, idx Index) string {
 	if idx.Unique {
 		unique = "UNIQUE "
 	}
-	return fmt.Sprintf("CREATE %sINDEX %s ON %s (%s);\n",
-		unique, quoteIdent(idx.Name), quoteIdent(table), strings.Join(cols, ", "))
+	where := ""
+	if idx.Where != "" {
+		// A partial index covers only the rows that satisfy the predicate,
+		// which is how "one active row per user" becomes a unique index.
+		where = " WHERE " + idx.Where
+	}
+	// IF NOT EXISTS lets a project declare an index it created by hand before
+	// drel knew about it. The snapshot cannot see such an object, so without
+	// this the first migration that declares it fails on a duplicate.
+	return fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)%s;\n",
+		unique, quoteIdent(idx.Name), quoteIdent(table), strings.Join(cols, ", "), where)
+}
+
+// fkConstraintName returns the deterministic name for a column's foreign key,
+// matching the idx_/uq_/chk_ convention used elsewhere.
+func fkConstraintName(table, column string) string {
+	return fmt.Sprintf("fk_%s_%s", table, column)
+}
+
+// addForeignKeySQL emits the ALTER that attaches a column's foreign key to an
+// existing table.
+func addForeignKeySQL(table string, c Column) string {
+	refCol := c.RefColumn
+	if refCol == "" {
+		refCol = "id"
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s)",
+		quoteIdent(table), quoteIdent(fkConstraintName(table, c.Name)),
+		quoteIdent(c.Name), quoteIdent(c.Ref), quoteIdent(refCol)))
+	if c.OnDelete != "" {
+		b.WriteString(" ON DELETE " + c.OnDelete)
+	}
+	if c.OnUpdate != "" {
+		b.WriteString(" ON UPDATE " + c.OnUpdate)
+	}
+	if c.Deferrable {
+		b.WriteString(" DEFERRABLE INITIALLY DEFERRED")
+	}
+	b.WriteString(";")
+	return b.String()
+}
+
+// sameForeignKey reports whether two columns declare the same foreign key.
+func sameForeignKey(a, b Column) bool {
+	refA, refB := a.RefColumn, b.RefColumn
+	if refA == "" {
+		refA = "id"
+	}
+	if refB == "" {
+		refB = "id"
+	}
+	return a.Ref == b.Ref && refA == refB &&
+		a.OnDelete == b.OnDelete && a.OnUpdate == b.OnUpdate && a.Deferrable == b.Deferrable
 }
 
 // GenerateSchema emits the full schema DDL for a slice of models, including
@@ -624,14 +689,24 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 		oldIdx := indexIndexes(old.Indexes)
 		newIdx := indexIndexes(new.Indexes)
 		for _, idx := range new.Indexes {
-			if _, ok := oldIdx[idx.Name]; !ok {
+			prev, ok := oldIdx[idx.Name]
+			switch {
+			case !ok:
 				up = append(up, strings.TrimRight(createIndexSQL(new.Name, idx), "\n"))
-				down = append(down, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
+				down = append(down, fmt.Sprintf("DROP INDEX IF EXISTS %s;", quoteIdent(idx.Name)))
+			case !prev.SameShape(idx):
+				// An index keeps its name while its columns, uniqueness or
+				// predicate change. Neither dialect alters those in place, so
+				// the index is dropped and recreated.
+				up = append(up, fmt.Sprintf("DROP INDEX IF EXISTS %s;", quoteIdent(idx.Name)))
+				up = append(up, strings.TrimRight(createIndexSQL(new.Name, idx), "\n"))
+				down = append(down, strings.TrimRight(createIndexSQL(new.Name, prev), "\n"))
+				down = append(down, fmt.Sprintf("DROP INDEX IF EXISTS %s;", quoteIdent(idx.Name)))
 			}
 		}
 		for _, idx := range old.Indexes {
 			if _, ok := newIdx[idx.Name]; !ok {
-				up = append(up, fmt.Sprintf("DROP INDEX %s;", quoteIdent(idx.Name)))
+				up = append(up, fmt.Sprintf("DROP INDEX IF EXISTS %s;", quoteIdent(idx.Name)))
 				down = append(down, strings.TrimRight(createIndexSQL(old.Name, idx), "\n"))
 			}
 		}
@@ -712,6 +787,32 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 		} else {
 			up = append(up, alterDefaultSQL(table, new.Name, new.Default))
 			down = append(down, alterDefaultSQL(table, old.Name, old.Default))
+		}
+	}
+
+	if !sameForeignKey(old, new) {
+		if dialect == "sqlite" {
+			// SQLite cannot add or drop a constraint in place.
+			needsRebuild = true
+		} else {
+			name := fkConstraintName(table, new.Name)
+			// The drop is unconditional and guarded: a project adopting an
+			// explicit references= tag may already hold a key drel created
+			// inline, and dropping by drel's own name is idempotent.
+			if old.Ref != "" {
+				up = append(up, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;",
+					quoteIdent(table), quoteIdent(name)))
+				down = append(down, addForeignKeySQL(table, old))
+			}
+			if new.Ref != "" {
+				up = append(up, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;",
+					quoteIdent(table), quoteIdent(name)))
+				up = append(up, addForeignKeySQL(table, new))
+				down = append(down, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;",
+					quoteIdent(table), quoteIdent(name)))
+				down = append(down, fmt.Sprintf("-- NOTE: %s.%s pointed at no table before this migration",
+					table, new.Name))
+			}
 		}
 	}
 

@@ -57,7 +57,7 @@ func TestSQLiteRebuild_DropsRenamesAndRecreatesTheIndexes(t *testing.T) {
 	sql := strings.Join(stmts, "\n")
 	assert.Contains(t, sql, `DROP TABLE "notes";`)
 	assert.Contains(t, sql, `ALTER TABLE "notes__drel_new" RENAME TO "notes";`)
-	assert.Contains(t, sql, `CREATE INDEX "idx_notes_tag" ON "notes" ("tag");`)
+	assert.Contains(t, sql, `CREATE INDEX IF NOT EXISTS "idx_notes_tag" ON "notes" ("tag");`)
 
 	dropAt, renameAt, indexAt := -1, -1, -1
 	for i, s := range stmts {
@@ -269,7 +269,7 @@ func TestDiffTable_RenameAndRebuildRelabelsTheIndexColumns(t *testing.T) {
 	upSQL, downSQL := strings.Join(up, "\n"), strings.Join(down, "\n")
 
 	// UP: the rebuild target is the new shape, so the index names the new column.
-	assert.Contains(t, upSQL, `CREATE INDEX "idx_notes_body" ON "notes" ("content");`)
+	assert.Contains(t, upSQL, `CREATE INDEX IF NOT EXISTS "idx_notes_body" ON "notes" ("content");`)
 
 	// DOWN: DiffSchemas reverses the down statements, so the rebuild runs BEFORE
 	// the rename back. Its target is therefore the old shape under the NEW column
@@ -278,7 +278,7 @@ func TestDiffTable_RenameAndRebuildRelabelsTheIndexColumns(t *testing.T) {
 	downRebuild := downSQL[strings.Index(downSQL, "PRAGMA defer_foreign_keys"):]
 	assert.Contains(t, downRebuild, "\"content\" TEXT\n", "the old shape: TEXT, no NOT NULL")
 	assert.NotContains(t, downRebuild, `"content" TEXT NOT NULL`)
-	assert.Contains(t, downRebuild, `CREATE INDEX "idx_notes_body" ON "notes" ("content");`)
+	assert.Contains(t, downRebuild, `CREATE INDEX IF NOT EXISTS "idx_notes_body" ON "notes" ("content");`)
 	assertNoUnknownColumnRefs(t, downRebuild, "body")
 	// The rename back runs last, after the rebuild.
 	assert.Contains(t, downSQL, `RENAME COLUMN "content" TO "body"`)
@@ -358,7 +358,7 @@ func TestDiffSchemas_TableRenamePlusColumnRenamePlusRebuildOnSQLite(t *testing.T
 	assert.Contains(t, upSQL, `ALTER TABLE "notes" RENAME TO "memos";`)
 	assert.Contains(t, upSQL, `ALTER TABLE "memos" RENAME COLUMN "body" TO "content";`)
 	assert.Contains(t, upSQL, `INSERT INTO "memos__drel_new" ("id", "content") SELECT "id", "content" FROM "memos";`)
-	assert.Contains(t, upSQL, `CREATE INDEX "idx_notes_body" ON "memos" ("content");`)
+	assert.Contains(t, upSQL, `CREATE INDEX IF NOT EXISTS "idx_notes_body" ON "memos" ("content");`)
 	assert.Less(t, strings.Index(upSQL, `RENAME COLUMN "body"`), strings.Index(upSQL, "PRAGMA defer_foreign_keys"))
 
 	// DOWN: rebuild back to the old shape first, then rename the column back,
@@ -372,7 +372,7 @@ func TestDiffSchemas_TableRenamePlusColumnRenamePlusRebuildOnSQLite(t *testing.T
 	rebuild := downSQL[rebuildStart:rebuildEnd]
 	assert.Contains(t, rebuild, `"content" TEXT`)
 	assert.NotContains(t, rebuild, `"content" TEXT NOT NULL`, "the down rebuild restores the old nullability")
-	assert.Contains(t, rebuild, `CREATE INDEX "idx_notes_body" ON "memos" ("content");`)
+	assert.Contains(t, rebuild, `CREATE INDEX IF NOT EXISTS "idx_notes_body" ON "memos" ("content");`)
 	assertNoUnknownColumnRefs(t, rebuild, "body")
 
 	assert.Contains(t, downSQL, `ALTER TABLE "memos" RENAME COLUMN "content" TO "body";`)

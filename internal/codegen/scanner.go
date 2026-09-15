@@ -119,6 +119,18 @@ func scanPackage(pkg *packages.Package) ([]ModelInfo, error) {
 			mi.TableName = modelOpts.table
 		}
 		mi.RenamedFrom = modelOpts.renamedFrom
+		// An index declared on the model names its columns explicitly, so it can
+		// cover a trait column (created_at, deleted_at, version) that has no Go
+		// field to tag.
+		for _, io := range modelOpts.indexes {
+			if len(io.columns) == 0 {
+				return nil, fmt.Errorf("codegen: model %s: index %q on the embedded drel.Model must name its columns, as index=%s[col_a,col_b]",
+					tn.Name(), io.name, io.name)
+			}
+			mi.Indexes = append(mi.Indexes, IndexDecl{
+				Name: io.name, Columns: io.columns, Unique: io.unique, Where: io.where,
+			})
+		}
 		mi.HasSoftDelete, mi.HasVersioned, mi.HasAudit = detectEmbeds(st)
 		flds, fErr := extractFields(st, pkg.PkgPath)
 		if fErr != nil {
@@ -385,7 +397,12 @@ func extractFields(st *types.Struct, ownerPkgPath string) ([]FieldInfo, error) {
 			RenamedFrom:  dbOpts.renamedFrom,
 			Unique:       dbOpts.unique,
 			Indexed:      dbOpts.indexed,
-			IndexName:    dbOpts.indexName,
+			IndexNames:   indexMemberships(dbOpts.indexes),
+			References:   dbOpts.references,
+			RefColumn:    dbOpts.refColumn,
+			OnDelete:     dbOpts.onDelete,
+			OnUpdate:     dbOpts.onUpdate,
+			Deferrable:   dbOpts.deferrable,
 			CheckExpr:    dbOpts.check,
 			Default:      dbOpts.def,
 			TypeOverride: dbOpts.typ,
@@ -451,7 +468,7 @@ func extractFields(st *types.Struct, ownerPkgPath string) ([]FieldInfo, error) {
 					fi.ColumnName = names[0]
 					fi.Unique = false
 					fi.Indexed = false
-					fi.IndexName = ""
+					fi.IndexNames = nil
 					fi.CheckExpr = ""
 				}
 				fi.MultiColTypes = defaultMultiColTypes(names)
@@ -517,9 +534,16 @@ func parseRelTagStructured(tag string) *RelationFieldInfo {
 
 // dbTagOpts holds the options parsed from a db struct tag after the column name.
 type dbTagOpts struct {
-	unique      bool
-	indexed     bool
-	indexName   string
+	unique  bool
+	indexed bool
+	// indexes lists every named index the tag joins, in tag order. A column may
+	// join several; a model-level tag declares its columns explicitly.
+	indexes     []indexOpt
+	references  string
+	refColumn   string
+	onDelete    string
+	onUpdate    string
+	deferrable  bool
 	check       string
 	def         string // db tag option: column DEFAULT value (db:"...,default=expr")
 	typ         string // db tag option: explicit SQL type override (db:"...,type=jsonb")
@@ -537,6 +561,8 @@ type dbTagOpts struct {
 //	db:"role,index=idx_role_age"      — named index; fields sharing the name compose
 //	db:"age,check=age >= 0"           — column CHECK constraint
 //	db:"role,check=role IN ('a','b')" — IN-list CHECK with embedded commas
+//	db:"state,unique_index=uq_active(state = 'active')" — partial unique index
+//	db:"user_id,references=auth_users.id,on_delete=cascade" — FK to any table
 //
 // Returns an error if an unrecognized option token is encountered.
 // Returns an empty column name when no db tag is present.
@@ -566,9 +592,35 @@ func parseDBTag(rawTag string) (string, dbTagOpts, error) {
 			opts.unique = true
 		case p == "index":
 			opts.indexed = true
-		case strings.HasPrefix(p, "index="):
+		case strings.HasPrefix(p, "index="), strings.HasPrefix(p, "unique_index="):
+			unique := strings.HasPrefix(p, "unique_index=")
+			body := strings.TrimPrefix(strings.TrimPrefix(p, "unique_"), "index=")
+			idx, err := parseIndexOpt(body, unique)
+			if err != nil {
+				return "", dbTagOpts{}, err
+			}
 			opts.indexed = true
-			opts.indexName = strings.TrimSpace(strings.TrimPrefix(p, "index="))
+			opts.indexes = append(opts.indexes, idx)
+		case strings.HasPrefix(p, "references="):
+			table, column, err := parseReferences(strings.TrimPrefix(p, "references="))
+			if err != nil {
+				return "", dbTagOpts{}, err
+			}
+			opts.references, opts.refColumn = table, column
+		case strings.HasPrefix(p, "on_delete="):
+			act, err := parseFKAction(strings.TrimPrefix(p, "on_delete="))
+			if err != nil {
+				return "", dbTagOpts{}, fmt.Errorf("db tag option on_delete=: %w", err)
+			}
+			opts.onDelete = act
+		case strings.HasPrefix(p, "on_update="):
+			act, err := parseFKAction(strings.TrimPrefix(p, "on_update="))
+			if err != nil {
+				return "", dbTagOpts{}, fmt.Errorf("db tag option on_update=: %w", err)
+			}
+			opts.onUpdate = act
+		case p == "deferrable":
+			opts.deferrable = true
 		case strings.HasPrefix(p, "check="):
 			opts.check = strings.TrimSpace(strings.TrimPrefix(p, "check="))
 		case strings.HasPrefix(p, "default="):
@@ -586,7 +638,7 @@ func parseDBTag(rawTag string) (string, dbTagOpts, error) {
 				return "", dbTagOpts{}, fmt.Errorf("db tag option renamed_from= requires a value (the previous name)")
 			}
 		default:
-			return "", dbTagOpts{}, fmt.Errorf("unknown db tag option %q (known: unique, index, index=, check=, default=, type=, table=, renamed_from=)", p)
+			return "", dbTagOpts{}, fmt.Errorf("unknown db tag option %q (known: unique, index, index=, unique_index=, references=, on_delete=, on_update=, deferrable, check=, default=, type=, table=, renamed_from=)", p)
 		}
 	}
 	return col, opts, nil
@@ -810,4 +862,107 @@ func targetModelName(t types.Type) string {
 		return named.Obj().Name()
 	}
 	return ""
+}
+
+// indexOpt is one parsed index= / unique_index= tag option.
+type indexOpt struct {
+	name    string
+	columns []string // empty on a field-level option: the field is the column
+	unique  bool
+	where   string
+}
+
+// parseIndexOpt reads the body of an index= or unique_index= option:
+//
+//	name                       — the field joins the index "name"
+//	name[col_a,col_b]          — model-level: the index covers these columns, in order
+//	name(predicate)            — partial index
+//	name[col_a,col_b](pred)    — both
+//
+// The column list uses brackets and the predicate uses parentheses, so
+// splitTagOptions keeps each one whole whatever commas it contains.
+func parseIndexOpt(body string, unique bool) (indexOpt, error) {
+	opt := indexOpt{unique: unique}
+	rest := strings.TrimSpace(body)
+
+	if i := strings.IndexByte(rest, '('); i >= 0 {
+		if !strings.HasSuffix(rest, ")") {
+			return opt, fmt.Errorf("db tag index option %q: the predicate is not closed", body)
+		}
+		opt.where = strings.TrimSpace(rest[i+1 : len(rest)-1])
+		if opt.where == "" {
+			return opt, fmt.Errorf("db tag index option %q: the predicate is empty", body)
+		}
+		rest = strings.TrimSpace(rest[:i])
+	}
+
+	if i := strings.IndexByte(rest, '['); i >= 0 {
+		if !strings.HasSuffix(rest, "]") {
+			return opt, fmt.Errorf("db tag index option %q: the column list is not closed", body)
+		}
+		for _, c := range strings.Split(rest[i+1:len(rest)-1], ",") {
+			c = strings.TrimSpace(c)
+			if c == "" {
+				return opt, fmt.Errorf("db tag index option %q: the column list holds an empty name", body)
+			}
+			opt.columns = append(opt.columns, c)
+		}
+		if len(opt.columns) == 0 {
+			return opt, fmt.Errorf("db tag index option %q: the column list is empty", body)
+		}
+		rest = strings.TrimSpace(rest[:i])
+	}
+
+	opt.name = rest
+	if opt.name == "" {
+		return opt, fmt.Errorf("db tag index option %q: the index has no name", body)
+	}
+	return opt, nil
+}
+
+// indexMemberships converts the field-level index options into the memberships
+// stored on the field. A field-level option names no columns: the field is the
+// column, and fields sharing a name compose the index in declaration order.
+func indexMemberships(opts []indexOpt) []IndexMembership {
+	var out []IndexMembership
+	for _, o := range opts {
+		out = append(out, IndexMembership{Name: o.name, Unique: o.unique, Where: o.where})
+	}
+	return out
+}
+
+// parseReferences reads a references=<table>[.<column>] option. The target
+// needs no drel model, so a column can point at a table another system owns.
+func parseReferences(v string) (table, column string, err error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", "", fmt.Errorf("db tag option references= requires a table name")
+	}
+	table, column = v, "id"
+	if i := strings.LastIndexByte(v, '.'); i >= 0 {
+		table, column = strings.TrimSpace(v[:i]), strings.TrimSpace(v[i+1:])
+	}
+	if table == "" || column == "" {
+		return "", "", fmt.Errorf("db tag option references=%q: expected table or table.column", v)
+	}
+	return table, column, nil
+}
+
+// parseFKAction maps a referential action to its SQL form. The closed set keeps
+// a typo out of the DDL.
+func parseFKAction(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "cascade":
+		return "CASCADE", nil
+	case "restrict":
+		return "RESTRICT", nil
+	case "set_null", "set null":
+		return "SET NULL", nil
+	case "set_default", "set default":
+		return "SET DEFAULT", nil
+	case "no_action", "no action":
+		return "NO ACTION", nil
+	default:
+		return "", fmt.Errorf("unknown action %q (known: cascade, restrict, set_null, set_default, no_action)", v)
+	}
 }

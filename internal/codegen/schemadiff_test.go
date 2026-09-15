@@ -46,7 +46,7 @@ func TestDiffSchemas_AddTable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, up, `CREATE TABLE "posts"`)
 	assert.Contains(t, up, `"title" text NOT NULL`)
-	assert.Contains(t, up, `CREATE INDEX "idx_posts_title" ON "posts" ("title");`)
+	assert.Contains(t, up, `CREATE INDEX IF NOT EXISTS "idx_posts_title" ON "posts" ("title");`)
 	assert.NotContains(t, up, `CREATE TABLE "users"`)
 	assert.Contains(t, down, `DROP TABLE IF EXISTS "posts";`)
 }
@@ -221,8 +221,8 @@ func TestDiffSchemas_AddIndex(t *testing.T) {
 	}}
 	up, down, err := DiffSchemas(old, newS, "postgres")
 	require.NoError(t, err)
-	assert.Contains(t, up, `CREATE INDEX "idx_users_email" ON "users" ("email");`)
-	assert.Contains(t, down, `DROP INDEX "idx_users_email";`)
+	assert.Contains(t, up, `CREATE INDEX IF NOT EXISTS "idx_users_email" ON "users" ("email");`)
+	assert.Contains(t, down, `DROP INDEX IF EXISTS "idx_users_email";`)
 }
 
 func TestDiffSchemas_DropIndex(t *testing.T) {
@@ -244,8 +244,8 @@ func TestDiffSchemas_DropIndex(t *testing.T) {
 	}}
 	up, down, err := DiffSchemas(old, newS, "postgres")
 	require.NoError(t, err)
-	assert.Contains(t, up, `DROP INDEX "idx_users_email";`)
-	assert.Contains(t, down, `CREATE INDEX "idx_users_email" ON "users" ("email");`)
+	assert.Contains(t, up, `DROP INDEX IF EXISTS "idx_users_email";`)
+	assert.Contains(t, down, `CREATE INDEX IF NOT EXISTS "idx_users_email" ON "users" ("email");`)
 }
 
 func TestDiffSchemas_UniqueIndex(t *testing.T) {
@@ -267,7 +267,7 @@ func TestDiffSchemas_UniqueIndex(t *testing.T) {
 	}}
 	up, _, err := DiffSchemas(old, newS, "postgres")
 	require.NoError(t, err)
-	assert.Contains(t, up, `CREATE UNIQUE INDEX "uq_users_email" ON "users" ("email");`)
+	assert.Contains(t, up, `CREATE UNIQUE INDEX IF NOT EXISTS "uq_users_email" ON "users" ("email");`)
 }
 
 func TestDiffSchemas_CompositeIndex(t *testing.T) {
@@ -291,7 +291,7 @@ func TestDiffSchemas_CompositeIndex(t *testing.T) {
 	}}
 	up, _, err := DiffSchemas(old, newS, "postgres")
 	require.NoError(t, err)
-	assert.Contains(t, up, `CREATE INDEX "idx_name" ON "users" ("first", "last");`)
+	assert.Contains(t, up, `CREATE INDEX IF NOT EXISTS "idx_name" ON "users" ("first", "last");`)
 }
 
 func TestDiffSchemas_AddEnum_Postgres(t *testing.T) {
@@ -337,8 +337,8 @@ func TestBuildSchema_IndexesFromTags(t *testing.T) {
 		Fields: []FieldInfo{
 			{Name: "email", GoType: "string", ColumnName: "email", Unique: true},
 			{Name: "age", GoType: "int", ColumnName: "age", Indexed: true},
-			{Name: "first", GoType: "string", ColumnName: "first", IndexName: "idx_name"},
-			{Name: "last", GoType: "string", ColumnName: "last", IndexName: "idx_name"},
+			{Name: "first", GoType: "string", ColumnName: "first", IndexNames: []IndexMembership{{Name: "idx_name"}}},
+			{Name: "last", GoType: "string", ColumnName: "last", IndexNames: []IndexMembership{{Name: "idx_name"}}},
 			{Name: "score", GoType: "int", ColumnName: "score", CheckExpr: "score >= 0"},
 		},
 	}

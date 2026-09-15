@@ -245,7 +245,7 @@ func TestParseDBTag_Options(t *testing.T) {
 	}{
 		{"unique", `db:"email,unique"`, "email", dbTagOpts{unique: true}},
 		{"index", `db:"age,index"`, "age", dbTagOpts{indexed: true}},
-		{"named index", `db:"x,index=ix"`, "x", dbTagOpts{indexed: true, indexName: "ix"}},
+		{"named index", `db:"x,index=ix"`, "x", dbTagOpts{indexed: true, indexes: []indexOpt{{name: "ix"}}}},
 		{"check", `db:"y,check=y > 0"`, "y", dbTagOpts{check: "y > 0"}},
 		{"plain", `db:"name"`, "name", dbTagOpts{}},
 		{"check with in-list", `db:"role,check=role IN ('admin','user')"`, "role", dbTagOpts{check: "role IN ('admin','user')"}},
@@ -293,9 +293,9 @@ type Account struct {
 
 	assert.True(t, byCol["email"].Unique)
 	assert.True(t, byCol["age"].Indexed)
-	assert.Empty(t, byCol["age"].IndexName)
+	assert.Empty(t, byCol["age"].IndexNames)
 	assert.True(t, byCol["first"].Indexed)
-	assert.Equal(t, "ix_name", byCol["first"].IndexName)
+	assert.Equal(t, []IndexMembership{{Name: "ix_name"}}, byCol["first"].IndexNames)
 	assert.Equal(t, "score > 0", byCol["score"].CheckExpr)
 }
 
