@@ -72,11 +72,14 @@ type FieldInfo struct {
 	// RenamedFrom, when set, is this column's previous name. The migration
 	// differ turns it into an ALTER TABLE ... RENAME COLUMN rather than a drop
 	// and an add.
-	RenamedFrom    string
-	IsExported     bool
-	RelTag         string
-	Relation       *RelationFieldInfo
-	IsVO           bool     // implements sql.Scanner + driver.Valuer (single-column VO)
+	RenamedFrom string
+	IsExported  bool
+	RelTag      string
+	Relation    *RelationFieldInfo
+	IsVO        bool // implements sql.Scanner + driver.Valuer (single-column VO)
+	// IsDate marks drel.Date, which is a value object whose column type no
+	// inference rule reaches: codegen reads types and never runs a method.
+	IsDate         bool
 	VOBaseType     string   // single-column VO: underlying basic Go type (e.g. "string", "int64"); empty if not derivable
 	HasEqual       bool     // single-column VO defines an Equal(T) bool method usable for diffing
 	IsComparable   bool     // single-column VO's Go type is comparable with == / != (types.Comparable)

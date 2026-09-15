@@ -13,16 +13,28 @@ func isMultiColumnMapper(t types.Type) bool {
 	return hasMethod(t, "DrelColumns") && hasMethod(t, "DrelValues") && hasMethod(t, "DrelScanMulti")
 }
 
-// hasDrelColumnTypes reports whether a multi-column VO exposes the optional
-// DrelColumnTypes() []string hook for explicit sub-column SQL types.
-func hasDrelColumnTypes(t types.Type) bool {
-	return hasMethod(t, "DrelColumnTypes")
+// drelPkgPath is drel's own import path. A handful of framework types (Date,
+// and time.Time from the standard library) map to a column type that no
+// inference rule can reach, because codegen reads types and never runs a
+// method.
+const drelPkgPath = "github.com/alternayte/drel"
+
+// isDrelDate reports whether t is drel.Date (after unwrapping a pointer).
+func isDrelDate(t types.Type) bool {
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	pkg := named.Obj().Pkg()
+	return pkg != nil && pkg.Path() == drelPkgPath && named.Obj().Name() == "Date"
 }
 
-// defaultMultiColTypes returns one "text" entry per sub-column name. The
-// optional DrelColumnTypes() hook is detected via hasDrelColumnTypes; W2-G1
-// defaults every sub-column to text, leaving explicit per-column type overrides
-// to the db-tag type= work (W2-G6/G9).
+// defaultMultiColTypes returns one "text" entry per sub-column name. A
+// multi-column value object cannot state its sub-column types: every segment of
+// its db tag is a column name, so there is no room for a type= option.
 func defaultMultiColTypes(names []string) []string {
 	out := make([]string, len(names))
 	for i := range out {

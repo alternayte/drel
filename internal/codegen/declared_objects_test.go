@@ -118,3 +118,89 @@ func TestDiffSchemas_IndexShapeChange(t *testing.T) {
 	require.NotEqual(t, -1, createIdx, "the predicate never reaches the DDL:\n%s", up)
 	assert.Less(t, dropIdx, createIdx)
 }
+
+// A constraint written by hand and then adopted is dropped BEFORE the column
+// type changes. PostgreSQL re-checks a surviving constraint against the new
+// type, which is what broke the enum migration.
+func TestDiffSchemas_AdoptedCheckDroppedBeforeTypeChange(t *testing.T) {
+	old := Schema{Tables: []Table{{
+		Name:    "quest_events",
+		Columns: []Column{{Name: "to_state", Type: "text", NotNull: true}},
+		Checks: []CheckConstraint{{
+			Name: "ck_quest_events_to_state",
+			Expr: `to_state = ANY (ARRAY['draft'::text, 'live'::text])`,
+		}},
+	}}}
+	newS := Schema{
+		Enums: []EnumDef{{Name: "queststate", Values: []string{"draft", "live"}}},
+		Tables: []Table{{
+			Name:    "quest_events",
+			Columns: []Column{{Name: "to_state", Type: `"queststate"`, NotNull: true}},
+		}},
+	}
+
+	up, down, err := DiffSchemas(old, newS, "postgres")
+	require.NoError(t, err)
+
+	dropIdx := strings.Index(up, `DROP CONSTRAINT IF EXISTS "ck_quest_events_to_state";`)
+	typeIdx := strings.Index(up, `ALTER COLUMN "to_state" TYPE`)
+	require.NotEqual(t, -1, dropIdx, "the adopted constraint is never dropped:\n%s", up)
+	require.NotEqual(t, -1, typeIdx)
+	assert.Less(t, dropIdx, typeIdx, "the constraint must go before the type change:\n%s", up)
+
+	// The down restores it, after the column type is reverted.
+	restoreIdx := strings.Index(down, `ADD CONSTRAINT "ck_quest_events_to_state"`)
+	revertIdx := strings.Index(down, `ALTER COLUMN "to_state" TYPE text`)
+	require.NotEqual(t, -1, restoreIdx, "the down does not restore the constraint:\n%s", down)
+	assert.Less(t, revertIdx, restoreIdx, "the type must be reverted before the constraint returns:\n%s", down)
+}
+
+// Adoption records what the database holds and the models do not declare.
+func TestAdoptLiveObjects(t *testing.T) {
+	snapshot := Schema{Tables: []Table{{
+		Name:    "quests",
+		Columns: []Column{{Name: "user_id", Type: "text"}, {Name: "state", Type: "text"}},
+	}}}
+	live := Schema{Tables: []Table{{
+		Name: "quests",
+		Columns: []Column{
+			{Name: "user_id", Type: "text", Ref: "auth_users", RefColumn: "id", OnDelete: "CASCADE"},
+			{Name: "state", Type: "text"},
+		},
+		Indexes: []Index{{Name: "one_active_quest", Columns: []string{"user_id"}, Unique: true, Where: "state = 'active'"}},
+		Checks:  []CheckConstraint{{Name: "ck_quests_state", Expr: "state IN ('draft')"}},
+	}}}
+	declared := Schema{Tables: []Table{{
+		Name:    "quests",
+		Columns: []Column{{Name: "user_id", Type: "text"}, {Name: "state", Type: "text"}},
+	}}}
+
+	merged, adopted := AdoptLiveObjects(snapshot, live, declared)
+	require.Len(t, adopted, 3)
+
+	tbl := merged.Tables[0]
+	require.Len(t, tbl.Checks, 1)
+	assert.Equal(t, "ck_quests_state", tbl.Checks[0].Name)
+	require.Len(t, tbl.Indexes, 1)
+	assert.Equal(t, "one_active_quest", tbl.Indexes[0].Name)
+	assert.Equal(t, "auth_users", tbl.Columns[0].Ref)
+	assert.Equal(t, "CASCADE", tbl.Columns[0].OnDelete)
+
+	// Adoption is idempotent.
+	again, adoptedAgain := AdoptLiveObjects(merged, live, declared)
+	assert.Empty(t, adoptedAgain)
+	assert.Len(t, again.Tables[0].Checks, 1)
+	assert.Len(t, again.Tables[0].Indexes, 1)
+}
+
+// A table no model owns is not taken over: it belongs to another system.
+func TestAdoptLiveObjects_IgnoresTablesNotInTheSnapshot(t *testing.T) {
+	snapshot := Schema{Tables: []Table{{Name: "quests"}}}
+	live := Schema{Tables: []Table{
+		{Name: "quests"},
+		{Name: "auth_users", Indexes: []Index{{Name: "idx_auth", Columns: []string{"id"}}}},
+	}}
+	merged, adopted := AdoptLiveObjects(snapshot, live, Schema{Tables: []Table{{Name: "quests"}}})
+	assert.Empty(t, adopted)
+	assert.Len(t, merged.Tables, 1)
+}

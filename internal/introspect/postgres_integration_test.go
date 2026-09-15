@@ -135,3 +135,72 @@ func TestIntrospect_GeneratedSchemaMatchesItsModels(t *testing.T) {
 		"a freshly generated schema must not read as drift\nunmanaged: %+v\nmissing: %+v\ndifferent: %+v",
 		drift.Unmanaged, drift.Missing, drift.Different)
 }
+
+// TestAdopt_ClosesTheStaleCheckMigration walks the reported failure end to end:
+// a hand-written CHECK, a column whose type becomes an enum, and a migration
+// that PostgreSQL refuses because it re-checks the stale constraint.
+func TestAdopt_ClosesTheStaleCheckMigration(t *testing.T) {
+	ctx := context.Background()
+	drv := pgDriver(t)
+
+	v1 := []codegen.ModelInfo{{
+		Name: "QuestEvent", TableName: "quest_events", PKType: "int",
+		Fields: []codegen.FieldInfo{
+			{Name: "ToState", GoType: "string", ColumnName: "to_state", IsExported: true},
+		},
+	}}
+	_, err := drv.Exec(ctx, codegen.GenerateSchema(v1, "postgres"))
+	require.NoError(t, err)
+
+	// The constraint a hand-written migration added, under its own name.
+	_, err = drv.Exec(ctx, `ALTER TABLE quest_events ADD CONSTRAINT ck_quest_events_to_state CHECK (to_state IN ('draft', 'live'))`)
+	require.NoError(t, err)
+	_, err = drv.Exec(ctx, `INSERT INTO quest_events (to_state) VALUES ('draft')`)
+	require.NoError(t, err)
+
+	// to_state becomes an enum.
+	v2 := []codegen.ModelInfo{{
+		Name: "QuestEvent", TableName: "quest_events", PKType: "int",
+		Fields: []codegen.FieldInfo{{
+			Name: "ToState", GoType: "QuestState", LocalGoType: "QuestState",
+			ColumnName: "to_state", IsExported: true,
+			IsEnum: true, EnumValues: []string{"draft", "live"}, EnumBaseType: "string",
+		}},
+	}}
+
+	snapshot := codegen.BuildSchema(v1, "postgres")
+	desired := codegen.BuildSchema(v2, "postgres")
+
+	// Without adoption the constraint is invisible and the migration fails the
+	// way the report describes.
+	blindUp, _, err := codegen.DiffSchemas(snapshot, desired, "postgres")
+	require.NoError(t, err)
+	_, err = drv.Exec(ctx, blindUp)
+	require.Error(t, err, "the stale constraint should break this migration:\n%s", blindUp)
+
+	// Adoption records it, and the differ then drops it ahead of the type change.
+	live, err := introspect.Schema(ctx, drv, "postgres")
+	require.NoError(t, err)
+	adoptedSnapshot, adopted := codegen.AdoptLiveObjects(snapshot, live, desired)
+	require.NotEmpty(t, adopted)
+	require.NotNil(t, find(adopted, "check constraint", "ck_quest_events_to_state"))
+
+	up, down, err := codegen.DiffSchemas(adoptedSnapshot, desired, "postgres")
+	require.NoError(t, err)
+	assert.Contains(t, up, `DROP CONSTRAINT IF EXISTS "ck_quest_events_to_state";`)
+
+	_, err = drv.Exec(ctx, up)
+	require.NoError(t, err, "the migration should apply once the constraint is known:\n%s", up)
+
+	// The row survived, and the column is now an enum.
+	var state string
+	require.NoError(t, drv.QueryRow(ctx, `SELECT to_state::text FROM quest_events`).Scan(&state))
+	assert.Equal(t, "draft", state)
+
+	// The down reverts the type and restores the constraint.
+	_, err = drv.Exec(ctx, down)
+	require.NoError(t, err, "the down should apply:\n%s", down)
+
+	_, err = drv.Exec(ctx, `INSERT INTO quest_events (to_state) VALUES ('bogus')`)
+	assert.Error(t, err, "the restored CHECK should reject a value outside the set")
+}

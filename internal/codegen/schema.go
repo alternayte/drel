@@ -577,6 +577,7 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	rebuildForChecks := false
 
 	// Emit the renames first, so every later statement can name the new column.
 	renamedOld := make(map[string]string, len(renames)) // old name -> new name
@@ -600,6 +601,39 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 	}
 	newCols := indexColumns(new.Columns)
 
+	// Table-level CHECK constraints. BuildSchema never fills Table.Checks: an
+	// entry is there because `migrate adopt` recorded a constraint written by
+	// hand. Dropping it comes FIRST, ahead of every column change, because
+	// PostgreSQL re-checks a surviving constraint against a column whose type
+	// changed -- which is how a stale check breaks an enum migration.
+	//
+	// down is the element-wise mirror: DiffSchemas reverses it as a whole, so
+	// the restore lands after the columns are reverted.
+	newChecks := map[string]bool{}
+	for _, c := range new.Checks {
+		newChecks[c.Name] = true
+	}
+	for _, c := range old.Checks {
+		if newChecks[c.Name] {
+			continue
+		}
+		if dialect == "sqlite" {
+			// SQLite cannot drop a constraint in place; the rebuild below omits
+			// it, because the rebuild's CREATE TABLE is built from the new shape.
+			rebuildForChecks = true
+			continue
+		}
+		up = append(up, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;",
+			quoteIdent(new.Name), quoteIdent(c.Name)))
+		if c.Expr != "" {
+			down = append(down, fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s);",
+				quoteIdent(new.Name), quoteIdent(c.Name), c.Expr))
+		} else {
+			down = append(down, fmt.Sprintf("-- WARNING: %s held constraint %s, whose expression drel never recorded; restore it by hand",
+				new.Name, c.Name))
+		}
+	}
+
 	// Modified columns (present in both). This pass runs first, ahead of the
 	// add and drop passes, because it decides whether the table needs a
 	// rebuild. The add and drop passes must know that: on the rebuild path the
@@ -608,7 +642,7 @@ func diffTable(old, new Table, dialect string) (up, down []string, err error) {
 	// breaks the down path, where the reversed rebuild has already applied it.
 	// Its statements are appended below, in their original position.
 	var modUp, modDown []string
-	rebuild := false
+	rebuild := rebuildForChecks
 	for _, nc := range new.Columns {
 		oc, ok := oldCols[nc.Name]
 		if !ok {

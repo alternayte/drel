@@ -439,6 +439,14 @@ func extractFields(st *types.Struct, ownerPkgPath string) ([]FieldInfo, error) {
 
 			// --- What the column is. One decision, one kind. ---
 			kind := classifyField(f.Type(), isMultiCol)
+
+			// A type= override naming a date or a timestamp needs a Go type
+			// that can read one back. A string cannot: the write succeeds and
+			// every later read fails with "cannot scan date into *string".
+			if isDateSQLType(dbOpts.typ) && kind != KindTime && kind != KindSingleColVO {
+				return nil, fmt.Errorf("field %s: `type=%s` needs a Go type that reads a date back; %s cannot, and the column would only fail on the first read. Use drel.Date for a calendar date, time.Time for a timestamp, or a value object that scans one",
+					f.Name(), dbOpts.typ, goTypeStr)
+			}
 			if dbOpts.typ == "" {
 				switch kind {
 				case KindUnsupported:
@@ -451,6 +459,7 @@ func extractFields(st *types.Struct, ownerPkgPath string) ([]FieldInfo, error) {
 			switch kind {
 			case KindSingleColVO:
 				fi.IsVO = true
+				fi.IsDate = isDrelDate(f.Type())
 				fi.VOBaseType = voBaseType(f.Type())
 				fi.HasEqual = hasMethod(f.Type(), "Equal")
 				fi.IsComparable = types.Comparable(voUnderlyingNamed(f.Type()))
@@ -965,4 +974,27 @@ func parseFKAction(v string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown action %q (known: cascade, restrict, set_null, set_default, no_action)", v)
 	}
+}
+
+// dateSQLTypes are the SQL types that a driver decodes to a time value. A
+// column declared as one of them cannot be read into a string.
+var dateSQLTypes = map[string]bool{
+	"date":                        true,
+	"timestamp":                   true,
+	"timestamptz":                 true,
+	"timestamp with time zone":    true,
+	"timestamp without time zone": true,
+	"time":                        true,
+	"timetz":                      true,
+	"time with time zone":         true,
+	"datetime":                    true,
+}
+
+// isDateSQLType reports whether a type= override names a date or time type.
+func isDateSQLType(sqlType string) bool {
+	t := strings.ToLower(strings.TrimSpace(sqlType))
+	if i := strings.IndexByte(t, '('); i >= 0 {
+		t = strings.TrimSpace(t[:i])
+	}
+	return dateSQLTypes[t]
 }

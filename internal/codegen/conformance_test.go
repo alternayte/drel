@@ -190,6 +190,7 @@ type Everything struct {
 	slug  string ` + "`db:\"slug,index\"`" + `
 	notes string ` + "`db:\"notes,default='none'\"`" + `
 	day   time.Time ` + "`db:\"day,type=date\"`" + `
+	userDay drel.Date ` + "`db:\"user_day\"`" + `
 
 	// A foreign key to a table drel does not model, with referential actions.
 	ownerID string ` + "`db:\"owner_id,references=auth_users.id,on_delete=cascade,on_update=restrict,deferrable\"`" + `
@@ -274,6 +275,8 @@ func TestCodegenConformance(t *testing.T) {
 	assert.Contains(t, ddl, `CREATE INDEX IF NOT EXISTS "idx_indexed_recent" ON "indexeds" ("owner", "created_at");`)
 	assert.Contains(t, ddl, `CREATE UNIQUE INDEX IF NOT EXISTS "uq_indexed_live" ON "indexeds" ("owner") WHERE live;`)
 	assert.Contains(t, ddl, `"day" date`)
+	// drel.Date is a calendar date, not a timestamp.
+	assert.Contains(t, ddl, `"user_day" date`)
 
 	// The package compiles. This is the assertion that catches a rendering bug
 	// the string assertions above do not name.
@@ -297,6 +300,13 @@ func TestCodegenConformance_RejectsUnmappableTypes(t *testing.T) {
 			name:  "byte slice",
 			field: "payload []byte `db:\"payload\"`",
 			want:  "[]byte columns are not supported",
+		},
+		{
+			// The write succeeds and every read fails, so this must not reach
+			// the database at all.
+			name:  "date type override on a string",
+			field: "day string `db:\"day,type=date\"`",
+			want:  "needs a Go type that reads a date back",
 		},
 	}
 	for _, tc := range cases {

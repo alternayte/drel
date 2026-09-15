@@ -291,6 +291,12 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 			} else {
 				sqlType = "jsonb"
 			}
+		case f.IsDate:
+			// drel.Date is a calendar date, not a timestamp.
+			sqlType = "date"
+			if dialect == "sqlite" {
+				sqlType = "DATE"
+			}
 		default:
 			sqlType = GoTypeToSQL(f.GoType, dialect)
 			if f.IsVO && f.VOBaseType != "" {

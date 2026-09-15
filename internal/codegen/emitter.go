@@ -184,7 +184,9 @@ func buildModelImportAliases(m ModelInfo) map[string]string {
 	aliasCount := make(map[string]int)
 
 	addPkg := func(pkgPath string) {
-		if pkgPath == "" || pkgPath == "time" || pkgPath == m.PkgPath {
+		// "time" is a std import written separately, and the generated file
+		// always imports drel itself: aliasing either one writes it twice.
+		if pkgPath == "" || pkgPath == "time" || pkgPath == drelPkgPath || pkgPath == m.PkgPath {
 			return
 		}
 		if _, ok := aliases[pkgPath]; ok {

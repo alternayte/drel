@@ -240,6 +240,33 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   It exits non-zero when a declared object is missing or differs, and zero when
   the database merely holds objects drel does not manage -- a project may own
   objects legitimately. Postgres and SQLite/libSQL are both supported.
+
+  `drel migrate adopt` records those objects into the module snapshots, so the
+  differ can act on them. Until it does, a stale constraint breaks the next type
+  change: PostgreSQL re-checks a constraint drel does not know about against the
+  new type, and reports `operator does not exist`. Once adopted, drel drops the
+  constraint ahead of the type change, and the down migration restores it.
+
+  The differ maintains only what a model declares, so after `adopt` the next
+  `migrate new` emits a `DROP` for each adopted object no model declares. That
+  SQL is reviewed before it is applied. Declare the object on its model --
+  `references=`, `index=`, `unique_index=`, `check=` -- and it stays, with no
+  migration at all.
+- **Dates** -- `drel.Date` is a calendar date in a SQL `date` column, so the
+  database orders, ranges and validates it:
+
+  ```go
+  type XPEntry struct {
+      drel.Model[int]
+      userDay drel.Date `db:"user_day"`
+  }
+  ```
+
+  A `time.Time` field maps to a timestamp, which carries a time of day and a
+  zone a calendar date does not have -- two clients in different zones disagree
+  about which day a timestamp falls on. `type=date` on a `string` field is
+  rejected at generation time: the write succeeds and every read fails with
+  `cannot scan date into *string`.
 - **Read replicas** -- `WithReadReplica` round-robins reads; writes and
   transactions use the primary; `Primary()` forces read-your-writes.
 - **Query batching** -- `NewBatch` + `BatchAll`/`BatchFirst`/`BatchCount`

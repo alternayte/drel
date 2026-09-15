@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alternayte/drel"
 	"github.com/alternayte/drel/internal/codegen"
 	"github.com/alternayte/drel/internal/driver/pgxdriver"
 	"github.com/stretchr/testify/assert"
@@ -296,4 +297,53 @@ func TestDeclaredForeignKey_AddedToExistingTable(t *testing.T) {
 
 	_, err = drv.Exec(ctx, down)
 	require.NoError(t, err, "down migration should apply:\n%s", down)
+}
+
+// TestDate_RoundTripsARealDateColumn proves the column type drel.Date
+// generates, and that a value written through it reads back. A text column
+// holding "2006-01-02" cannot order or range as a date, which is why the type
+// exists.
+func TestDate_RoundTripsARealDateColumn(t *testing.T) {
+	ctx := context.Background()
+	drv := pgDriver(t)
+
+	models := []codegen.ModelInfo{{
+		Name: "Entry", TableName: "entries", PKType: "int",
+		Fields: []codegen.FieldInfo{{
+			Name: "UserDay", GoType: "Date", LocalGoType: "Date",
+			TypePkgPath: "github.com/alternayte/drel",
+			ColumnName:  "user_day", IsExported: true,
+			IsVO: true, IsDate: true, IsComparable: true, HasEqual: true,
+		}},
+	}}
+
+	ddl := codegen.GenerateSchema(models, "postgres")
+	assert.Contains(t, ddl, `"user_day" date`)
+	_, err := drv.Exec(ctx, ddl)
+	require.NoError(t, err)
+
+	day := drel.NewDate(2026, time.March, 4)
+	_, err = drv.Exec(ctx, `INSERT INTO entries (user_day) VALUES ($1)`, day)
+	require.NoError(t, err, "a Date must write to a date column")
+
+	var got drel.Date
+	require.NoError(t, drv.QueryRow(ctx, `SELECT user_day FROM entries`).Scan(&got))
+	assert.Equal(t, day, got)
+
+	// The column is a real date: the server orders and ranges it.
+	_, err = drv.Exec(ctx, `INSERT INTO entries (user_day) VALUES ($1)`, drel.NewDate(2026, time.January, 2))
+	require.NoError(t, err)
+	var first drel.Date
+	require.NoError(t, drv.QueryRow(ctx, `SELECT min(user_day) FROM entries`).Scan(&first))
+	assert.Equal(t, drel.NewDate(2026, time.January, 2), first)
+
+	var inRange int
+	require.NoError(t, drv.QueryRow(ctx,
+		`SELECT count(*) FROM entries WHERE user_day >= $1 AND user_day < $2`,
+		drel.NewDate(2026, time.February, 1), drel.NewDate(2026, time.April, 1)).Scan(&inRange))
+	assert.Equal(t, 1, inRange)
+
+	// The server rejects a day that does not exist, which a text column accepts.
+	_, err = drv.Exec(ctx, `INSERT INTO entries (user_day) VALUES ('2026-02-30')`)
+	assert.Error(t, err, "a date column should reject 2026-02-30")
 }

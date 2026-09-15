@@ -49,6 +49,8 @@ func runMigrate(parsed parsedCmd) {
 		runMigrateCheck(parsed)
 	case "verify":
 		runMigrateVerify(parsed)
+	case "adopt":
+		runMigrateAdopt(parsed)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown migrate command: %s\n", parsed.Subcommand)
 		printMigrateUsage()
@@ -585,4 +587,100 @@ func runMigrateVerify(parsed parsedCmd) {
 	if len(drift.Missing) > 0 || len(drift.Different) > 0 {
 		os.Exit(1)
 	}
+}
+
+// runMigrateAdopt records the objects the database holds and the models do not
+// declare into the module snapshots, so the migration differ can see them.
+//
+// A constraint or an index written by hand is absent from the snapshot the
+// differ works from, so every later migration is planned as though it did not
+// exist -- and PostgreSQL then re-checks a stale constraint against a column
+// whose type just changed.
+func runMigrateAdopt(parsed parsedCmd) {
+	dsn := requireDSN()
+	ctx, stop := signalContext()
+	defer stop()
+
+	cfg, err := codegen.LoadConfig(parsed.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate adopt: %v\n", err)
+		os.Exit(1)
+	}
+	cfgDir, _ := filepath.Abs(filepath.Dir(parsed.ConfigPath))
+
+	drv, err := openMigrateDriver(ctx, parsed, dsn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate adopt: %v\n", err)
+		os.Exit(1)
+	}
+	defer drv.Close()
+
+	dialect := runnerDialect(parsed.ConfigPath, dsn)
+	live, err := introspect.Schema(ctx, drv, dialect)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate adopt: %v\n", err)
+		os.Exit(1)
+	}
+	schemaDialect := dialect
+	if schemaDialect == "libsql" {
+		schemaDialect = "sqlite"
+	}
+
+	targets := cfg.ModuleList()
+	if parsed.Module != "" {
+		one, mErr := cfg.Module(parsed.Module)
+		if mErr != nil {
+			fmt.Fprintf(os.Stderr, "drel migrate adopt: %v\n", mErr)
+			os.Exit(1)
+		}
+		targets = []codegen.ModuleConfig{one}
+	}
+
+	var total []codegen.DriftItem
+	for _, m := range targets {
+		dir := m.Migrations
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(cfgDir, dir)
+		}
+		snapshotPath := filepath.Join(dir, ".drel_snapshot.json")
+		snapshot, hasSnapshot, sErr := codegen.LoadSnapshot(snapshotPath)
+		if sErr != nil {
+			fmt.Fprintf(os.Stderr, "drel migrate adopt: %v\n", sErr)
+			os.Exit(1)
+		}
+		if !hasSnapshot {
+			fmt.Fprintf(os.Stderr, "drel: module %q has no snapshot yet; run `drel migrate new --module %s` first\n", m.Name, m.Name)
+			continue
+		}
+
+		models, mErr := codegen.ScanPackages(m.Packages, cfgDir)
+		if mErr != nil {
+			fmt.Fprintf(os.Stderr, "drel migrate adopt: %v\n", mErr)
+			os.Exit(1)
+		}
+
+		merged, adopted := codegen.AdoptLiveObjects(snapshot, live, codegen.BuildSchema(models, schemaDialect))
+		if len(adopted) == 0 {
+			continue
+		}
+		if err := codegen.SaveSnapshot(snapshotPath, merged); err != nil {
+			fmt.Fprintf(os.Stderr, "drel migrate adopt: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("drel: module %s recorded %d object(s):\n", m.Name, len(adopted))
+		for _, it := range adopted {
+			fmt.Printf("  + %s\n", it)
+		}
+		total = append(total, adopted...)
+	}
+
+	if len(total) == 0 {
+		fmt.Println("drel: nothing to record; the snapshots already match the database")
+		return
+	}
+	fmt.Println()
+	fmt.Println("drel: the differ can now see these objects. It maintains only what a model")
+	fmt.Println("      declares, so the next `drel migrate new` emits a DROP for each one that")
+	fmt.Println("      no model declares. Read that SQL before applying it: declare the object")
+	fmt.Println("      on its model to keep it (references=, index=, unique_index=, check=).")
 }

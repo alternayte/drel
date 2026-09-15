@@ -23,6 +23,15 @@ minor versions may contain breaking changes.
   trait column such as `created_at`, which has no Go field to tag.
 - An index whose columns, uniqueness or predicate change is dropped and
   recreated. The differ compared names only, so a reshaped index never changed.
+- `drel.Date`, a calendar date in a SQL `date` column, so the database orders,
+  ranges and validates it. A `time.Time` field maps to a timestamp, which
+  carries a time of day and a zone a calendar date does not have.
+- `drel migrate adopt` records into the module snapshots the objects the
+  database holds that no model declares, so the differ can act on them. A
+  constraint written by hand previously survived a column type change, and
+  PostgreSQL then re-checked it against the new type: `operator does not exist`.
+  drel now drops an adopted constraint ahead of the type change, and the down
+  migration restores it.
 - `drel migrate verify` reads the live database and reports how it differs from
   the models: objects the database holds that no model declares, objects the
   models declare that the database lacks, and objects whose shape differs. The
@@ -31,6 +40,9 @@ minor versions may contain breaking changes.
 
 ### Changed
 
+- `type=date` (and any other date or time SQL type) on a Go type that cannot
+  read one back is rejected at generation time. A `string` field accepted the
+  write and failed every read with `cannot scan date into *string`.
 - Generated `CREATE INDEX` carries `IF NOT EXISTS`, and `DROP INDEX` carries
   `IF EXISTS`, so declaring an index a project created by hand does not fail on
   the duplicate.
