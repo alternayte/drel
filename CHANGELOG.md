@@ -23,6 +23,11 @@ minor versions may contain breaking changes.
   trait column such as `created_at`, which has no Go field to tag.
 - An index whose columns, uniqueness or predicate change is dropped and
   recreated. The differ compared names only, so a reshaped index never changed.
+- `drel migrate verify` reads the live database and reports how it differs from
+  the models: objects the database holds that no model declares, objects the
+  models declare that the database lacks, and objects whose shape differs. The
+  migration differ works from a snapshot of drel's own output, so an index or a
+  constraint written by hand was invisible to it. Postgres and SQLite/libSQL.
 
 ### Changed
 

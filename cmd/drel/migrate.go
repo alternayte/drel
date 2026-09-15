@@ -11,6 +11,7 @@ import (
 	"github.com/alternayte/drel/internal/codegen"
 	"github.com/alternayte/drel/internal/driver"
 	"github.com/alternayte/drel/internal/dsn"
+	"github.com/alternayte/drel/internal/introspect"
 	"github.com/alternayte/drel/internal/migrate"
 )
 
@@ -46,6 +47,8 @@ func runMigrate(parsed parsedCmd) {
 		runMigrateLint(parsed)
 	case "check":
 		runMigrateCheck(parsed)
+	case "verify":
+		runMigrateVerify(parsed)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown migrate command: %s\n", parsed.Subcommand)
 		printMigrateUsage()
@@ -489,10 +492,9 @@ func runMigrateCheck(parsed parsedCmd) {
 		os.Exit(1)
 	}
 	if len(pending) == 0 {
-		// NOTE: "no unapplied files" is not the same as "no schema drift" —
-		// manual out-of-band ALTERs are not detected here. Use `migrate lint`
-		// to catch checksum tampering; live schema comparison requires an
-		// external introspection tool.
+		// "no unapplied files" is not the same as "no schema drift": an
+		// out-of-band ALTER is invisible here. `migrate lint` catches checksum
+		// tampering, and `migrate verify` compares the live schema.
 		fmt.Println("drel: no unapplied migrations")
 		return
 	}
@@ -501,4 +503,86 @@ func runMigrateCheck(parsed parsedCmd) {
 		fmt.Fprintf(os.Stderr, "  [ ] %s_%s\n", m.Version, m.Name)
 	}
 	os.Exit(1)
+}
+
+// runMigrateVerify compares the live database against the schema the models
+// declare, and reports the difference.
+//
+// The migration differ works from a snapshot of what drel itself generated, so
+// a constraint or an index written by hand is invisible to it: every later
+// migration is planned as though the object did not exist. This command is how
+// a person sees such an object.
+func runMigrateVerify(parsed parsedCmd) {
+	dsn := requireDSN()
+	ctx, stop := signalContext()
+	defer stop()
+
+	cfg, err := codegen.LoadConfig(parsed.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate verify: %v\n", err)
+		os.Exit(1)
+	}
+
+	// The whole database is compared, so every module's models are scanned,
+	// even when --module narrows another command.
+	cfgDir, _ := filepath.Abs(filepath.Dir(parsed.ConfigPath))
+	models, err := codegen.ScanPackages(cfg.AllPackages(), cfgDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate verify: %v\n", err)
+		os.Exit(1)
+	}
+
+	drv, err := openMigrateDriver(ctx, parsed, dsn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate verify: %v\n", err)
+		os.Exit(1)
+	}
+	defer drv.Close()
+
+	dialect := runnerDialect(parsed.ConfigPath, dsn)
+	live, err := introspect.Schema(ctx, drv, dialect)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drel migrate verify: %v\n", err)
+		os.Exit(1)
+	}
+
+	// libSQL reuses the SQLite schema shapes.
+	schemaDialect := dialect
+	if schemaDialect == "libsql" {
+		schemaDialect = "sqlite"
+	}
+	drift := codegen.CompareSchemas(live, codegen.BuildSchema(models, schemaDialect))
+
+	if drift.Empty() {
+		fmt.Println("drel: the database matches the models")
+		return
+	}
+
+	if len(drift.Unmanaged) > 0 {
+		fmt.Printf("drel: %d object(s) the database holds that no model declares:\n", len(drift.Unmanaged))
+		for _, it := range drift.Unmanaged {
+			fmt.Printf("  ~ %s\n", it)
+		}
+		fmt.Println("    A later migration is planned as though these do not exist.")
+		fmt.Println("    Declare each one on its model, or accept that drel will not maintain it.")
+	}
+	if len(drift.Missing) > 0 {
+		fmt.Fprintf(os.Stderr, "drel: %d object(s) the models declare that the database does not hold:\n", len(drift.Missing))
+		for _, it := range drift.Missing {
+			fmt.Fprintf(os.Stderr, "  - %s\n", it)
+		}
+		fmt.Fprintln(os.Stderr, "    Run `drel migrate up`, or generate the migration that adds them.")
+	}
+	if len(drift.Different) > 0 {
+		fmt.Fprintf(os.Stderr, "drel: %d object(s) differ between the database and the models:\n", len(drift.Different))
+		for _, it := range drift.Different {
+			fmt.Fprintf(os.Stderr, "  ! %s\n", it)
+		}
+	}
+
+	// An unmanaged object is a fact to act on, not a failure: a project may own
+	// objects drel does not. A missing or different object is drift.
+	if len(drift.Missing) > 0 || len(drift.Different) > 0 {
+		os.Exit(1)
+	}
 }

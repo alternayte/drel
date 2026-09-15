@@ -223,6 +223,23 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
 
   Generated `CREATE INDEX` carries `IF NOT EXISTS`, so declaring an index a
   project created by hand does not fail on the duplicate.
+- **Drift report** -- `drel migrate verify` reads the live database and compares
+  it against the models. The migration differ works from a snapshot of what drel
+  itself generated, so an index or a constraint written by hand is invisible to
+  it, and every later migration is planned as though the object did not exist.
+  `verify` names such objects:
+
+  ```
+  drel: 2 object(s) the database holds that no model declares:
+    ~ table auth_users
+    ~ index quests.one_active_quest (unique (user_id) where state = 'active')
+  drel: 1 object(s) the models declare that the database does not hold:
+    - column quests.title
+  ```
+
+  It exits non-zero when a declared object is missing or differs, and zero when
+  the database merely holds objects drel does not manage -- a project may own
+  objects legitimately. Postgres and SQLite/libSQL are both supported.
 - **Read replicas** -- `WithReadReplica` round-robins reads; writes and
   transactions use the primary; `Primary()` forces read-your-writes.
 - **Query batching** -- `NewBatch` + `BatchAll`/`BatchFirst`/`BatchCount`

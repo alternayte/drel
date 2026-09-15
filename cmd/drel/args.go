@@ -83,13 +83,13 @@ func parseArgs(argv []string) (parsedCmd, error) {
 
 	case "migrate":
 		if len(argv) < 2 {
-			return parsedCmd{}, fmt.Errorf("migrate: missing subcommand (new|up|down|status|lint|check)")
+			return parsedCmd{}, fmt.Errorf("migrate: missing subcommand (new|up|down|status|lint|check|verify)")
 		}
 		sub := argv[1]
 		switch sub {
 		case "--help", "-h":
 			return parsedCmd{Command: "help"}, nil
-		case "new", "up", "down", "status", "lint", "check":
+		case "new", "up", "down", "status", "lint", "check", "verify":
 		default:
 			return parsedCmd{}, fmt.Errorf("unknown migrate command: %s", sub)
 		}

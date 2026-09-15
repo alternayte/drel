@@ -21,10 +21,14 @@ type Schema struct {
 // leaves PrimaryKey empty and instead declares the key inline on that
 // column, via its PK field and a type string embedding "PRIMARY KEY".
 type Table struct {
-	Name       string   `json:"name"`
-	Columns    []Column `json:"columns"`
-	Indexes    []Index  `json:"indexes,omitempty"`
-	PrimaryKey []string `json:"primaryKey,omitempty"`
+	Name string `json:"name"`
+	// Checks lists the table's named CHECK constraints. It is filled by
+	// introspection only: the generated schema carries a column's CHECK on the
+	// column itself.
+	Checks     []CheckConstraint `json:"checks,omitempty"`
+	Columns    []Column          `json:"columns"`
+	Indexes    []Index           `json:"indexes,omitempty"`
+	PrimaryKey []string          `json:"primaryKey,omitempty"`
 
 	// RenamedFrom is the table's previous name, declared by a renamed_from
 	// marker on the model. It is a diff-time input only, never persisted: a
@@ -55,6 +59,14 @@ type Column struct {
 
 	// RenamedFrom is the column's previous name. Diff-time only; see Table.
 	RenamedFrom string `json:"-"`
+}
+
+// CheckConstraint is a named CHECK on a table. drel declares one per column and
+// names it chk_<table>_<column>; introspection reports every one the database
+// holds, whoever created it.
+type CheckConstraint struct {
+	Name string `json:"name"`
+	Expr string `json:"expr,omitempty"`
 }
 
 // Index describes a single (possibly composite, possibly unique) index.
