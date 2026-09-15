@@ -675,8 +675,19 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 				down = append(down, fmt.Sprintf("-- WARNING: %s.%s is a key column (%s -> %s); drop and recreate the key by hand, the statement below is incomplete",
 					table, new.Name, new.Type, old.Type))
 			}
-			up = append(up, alterColumnTypeSQL(table, new.Name, new.Type))
-			down = append(down, alterColumnTypeSQL(table, new.Name, old.Type))
+			if isTextSQLType(old.Type) && !isTextSQLType(new.Type) {
+				if new.NotNull {
+					// NOT NULL leaves nowhere to put a value that does not
+					// parse, so the cast stays plain and fails naming the value.
+					up = append(up, fmt.Sprintf("-- WARNING: %s.%s is NOT NULL; a row holding '' or any text the target type cannot parse fails the cast below. Backfill those rows first",
+						table, new.Name))
+				} else {
+					up = append(up, fmt.Sprintf("-- NOTE: %s.%s holds text; a row holding '' becomes NULL under the cast below",
+						table, new.Name))
+				}
+			}
+			up = append(up, alterColumnTypeSQL(table, new.Name, old.Type, new.Type, new.NotNull))
+			down = append(down, alterColumnTypeSQL(table, new.Name, new.Type, old.Type, old.NotNull))
 		}
 	}
 
@@ -726,9 +737,27 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 // Without USING, PostgreSQL refuses the statement outright. An explicit cast
 // covers every pair a generated schema produces, and the ones it cannot cast
 // fail with the server's own message naming both types.
-func alterColumnTypeSQL(table, column, sqlType string) string {
+func alterColumnTypeSQL(table, column, fromType, toType string, notNull bool) string {
+	expr := quoteIdent(column)
+	if isTextSQLType(fromType) && !isTextSQLType(toType) && !notNull {
+		// '' is a legal text value and casts to nothing else. NULLIF turns it
+		// into NULL, which a nullable column accepts. A NOT NULL column has
+		// nowhere to put it, so the cast stays plain there and fails with the
+		// server's message naming the value; the caller emits a warning.
+		expr = fmt.Sprintf("NULLIF(%s, '')", quoteIdent(column))
+	}
 	return fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s USING %s::%s;",
-		quoteIdent(table), quoteIdent(column), sqlType, quoteIdent(column), castTargetType(sqlType))
+		quoteIdent(table), quoteIdent(column), toType, expr, castTargetType(toType))
+}
+
+// isTextSQLType reports whether a SQL type stores arbitrary text, and so can
+// hold ” -- a value that casts to no other type.
+func isTextSQLType(sqlType string) bool {
+	t := strings.ToUpper(strings.TrimSpace(castTargetType(sqlType)))
+	return t == "TEXT" || t == "CITEXT" ||
+		strings.HasPrefix(t, "VARCHAR") ||
+		strings.HasPrefix(t, "CHARACTER VARYING") ||
+		strings.HasPrefix(t, "CHAR")
 }
 
 // castTargetType returns the part of a column type string usable after "::".

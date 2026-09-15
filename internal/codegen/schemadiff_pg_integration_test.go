@@ -145,3 +145,51 @@ func TestDiffSchemas_TypeChangeWithData(t *testing.T) {
 	_, err = drv.Exec(ctx, down)
 	require.NoError(t, err, "down migration should apply on Postgres:\n%s", down)
 }
+
+// TestDiffSchemas_TypeChangeWithEmptyStrings casts a text column that holds ”
+// to a timestamp and to an enum. A plain cast fails on those rows with
+// "invalid input syntax", so a whole migration rolls back on real data.
+func TestDiffSchemas_TypeChangeWithEmptyStrings(t *testing.T) {
+	ctx := context.Background()
+	drv := pgDriver(t)
+
+	v1 := []codegen.ModelInfo{{
+		Name: "QuestEvent", TableName: "quest_events", PKType: "int",
+		Fields: []codegen.FieldInfo{
+			{Name: "ToState", GoType: "*string", ColumnName: "to_state", IsExported: true},
+			{Name: "StartedAt", GoType: "*string", ColumnName: "started_at", IsExported: true},
+		},
+	}}
+	_, err := drv.Exec(ctx, codegen.GenerateSchema(v1, "postgres"))
+	require.NoError(t, err)
+
+	_, err = drv.Exec(ctx, "INSERT INTO quest_events (to_state, started_at) VALUES ('draft', '2026-01-02T03:04:05Z'), ('', '')")
+	require.NoError(t, err)
+
+	v2 := []codegen.ModelInfo{{
+		Name: "QuestEvent", TableName: "quest_events", PKType: "int",
+		Fields: []codegen.FieldInfo{
+			{
+				Name: "ToState", GoType: "*QuestState", LocalGoType: "QuestState", IsPointer: true,
+				ColumnName: "to_state", IsExported: true,
+				IsEnum: true, EnumValues: []string{"draft", "live"}, EnumBaseType: "string",
+			},
+			{Name: "StartedAt", GoType: "*time.Time", LocalGoType: "time.Time", IsPointer: true, ColumnName: "started_at", IsExported: true},
+		},
+	}}
+
+	up, _, err := codegen.DiffSchemas(codegen.BuildSchema(v1, "postgres"), codegen.BuildSchema(v2, "postgres"), "postgres")
+	require.NoError(t, err)
+
+	_, err = drv.Exec(ctx, up)
+	require.NoError(t, err, "up migration should apply to a table holding empty strings:\n%s", up)
+
+	// The empty strings became NULL; the real values survived.
+	var nulls int
+	require.NoError(t, drv.QueryRow(ctx, "SELECT count(*) FROM quest_events WHERE to_state IS NULL AND started_at IS NULL").Scan(&nulls))
+	assert.Equal(t, 1, nulls)
+
+	var state string
+	require.NoError(t, drv.QueryRow(ctx, "SELECT to_state::text FROM quest_events WHERE to_state IS NOT NULL").Scan(&state))
+	assert.Equal(t, "draft", state)
+}

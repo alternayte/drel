@@ -36,10 +36,13 @@ func TestDiffSchemas_ColumnTypeChangeNeedsUsing(t *testing.T) {
 	up, down, err := DiffSchemas(old, newSchema, "postgres")
 	require.NoError(t, err)
 
+	// to_state is NOT NULL: the cast stays plain, so the server names the value
+	// it cannot parse. started_at is nullable, so '' maps to NULL.
 	assert.Contains(t, up, `ALTER TABLE "quest_events" ALTER COLUMN "to_state" TYPE "queststate" USING "to_state"::"queststate";`)
-	assert.Contains(t, up, `ALTER TABLE "quest_events" ALTER COLUMN "started_at" TYPE timestamptz USING "started_at"::timestamptz;`)
+	assert.Contains(t, up, `ALTER TABLE "quest_events" ALTER COLUMN "started_at" TYPE timestamptz USING NULLIF("started_at", '')::timestamptz;`)
 
-	// The down direction casts back the same way.
+	// The down direction casts back. The target is text, which takes any value,
+	// so no NULLIF is needed either way.
 	assert.Contains(t, down, `ALTER TABLE "quest_events" ALTER COLUMN "to_state" TYPE text USING "to_state"::text;`)
 	assert.Contains(t, down, `ALTER TABLE "quest_events" ALTER COLUMN "started_at" TYPE text USING "started_at"::text;`)
 
