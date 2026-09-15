@@ -64,6 +64,10 @@ minor versions may contain breaking changes.
   previously reached the emitter, or became a `jsonb` column by default.
 - A code-generation failure that produces invalid Go now quotes the emitted
   line, instead of reporting only a line, a column and a parser message.
+- A column type change carries a `-- NOTE` naming the table to check for
+  constraints and indexes drel does not manage. The snapshot cannot see a
+  hand-written object, and PostgreSQL re-checks every one of them against the
+  new type.
 
 ### Changed
 

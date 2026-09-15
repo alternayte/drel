@@ -750,6 +750,13 @@ func diffColumn(table string, old, new Column, dialect string) (up, down []strin
 				down = append(down, fmt.Sprintf("-- WARNING: %s.%s is a key column (%s -> %s); drop and recreate the key by hand, the statement below is incomplete",
 					table, new.Name, new.Type, old.Type))
 			}
+			if old.Check == "" {
+				// drel drops a CHECK it declared (above), but the snapshot
+				// cannot see a constraint or index a person wrote by hand, and
+				// PostgreSQL re-checks every one of them against the new type.
+				up = append(up, fmt.Sprintf("-- NOTE: check %s for constraints or indexes drel does not manage; the type change below re-checks them",
+					table))
+			}
 			if isTextSQLType(old.Type) && !isTextSQLType(new.Type) {
 				if new.NotNull {
 					// NOT NULL leaves nowhere to put a value that does not
