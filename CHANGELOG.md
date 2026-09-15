@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
-## [Unreleased]
+## [0.10.0] - 2026-09-15
 
 ### Added
 
@@ -60,6 +60,14 @@ minor versions may contain breaking changes.
 - A type change on a key column (one whose type carries `PRIMARY KEY` or
   `SERIAL`) now emits a `-- WARNING` naming it. The differ does not drop and
   recreate the key, so the statement is incomplete and must be written by hand.
+- A text column casting to another type maps `''` to NULL when the target is
+  nullable. `''` is a legal text value and casts to no other type, so the
+  migration failed on those rows and rolled back whole. A NOT NULL target keeps
+  the plain cast, because there is nowhere to put the value, and carries a
+  `-- WARNING` to backfill first.
+- A column type change carries a `-- NOTE` naming the table to check for
+  constraints and indexes drel does not manage, for a project that has not run
+  `drel migrate adopt`.
 
 ## [0.9.0] - 2026-09-14
 
@@ -81,10 +89,6 @@ minor versions may contain breaking changes.
   previously reached the emitter, or became a `jsonb` column by default.
 - A code-generation failure that produces invalid Go now quotes the emitted
   line, instead of reporting only a line, a column and a parser message.
-- A column type change carries a `-- NOTE` naming the table to check for
-  constraints and indexes drel does not manage. The snapshot cannot see a
-  hand-written object, and PostgreSQL re-checks every one of them against the
-  new type.
 
 ### Changed
 
@@ -664,6 +668,7 @@ Initial release: Postgres (pgx) core, code generation (model scanning, query
 builders, scan/snapshot/diff), basic CRUD, snapshot-based change tracking,
 implicit transactions, and the type-safe query builder.
 
+[0.10.0]: https://github.com/alternayte/drel/releases/tag/v0.10.0
 [0.9.0]: https://github.com/alternayte/drel/releases/tag/v0.9.0
 [0.8.1]: https://github.com/alternayte/drel/releases/tag/v0.8.1
 [0.8.0]: https://github.com/alternayte/drel/releases/tag/v0.8.0
