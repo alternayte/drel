@@ -71,9 +71,12 @@ func (d Date) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d", d.year, d.month, d.day)
 }
 
-// IsZero reports whether d is the zero Date. It is deliberately not the
-// zero<->NULL bridge that a value object opts into with an IsZero method on a
-// pointer receiver: a Date column stays NOT NULL unless the field is a pointer.
+// IsZero reports whether d is the zero Date.
+//
+// A value object with an IsZero method normally opts its column into the
+// zero<->NULL bridge, because such a type returns nil from Value for its zero
+// value. Date does not: Value always writes a date, so codegen keeps the column
+// NOT NULL. Use a *Date for a column that may hold NULL.
 func (d Date) IsZero() bool { return d == Date{} }
 
 // Equal reports whether two dates are the same day.

@@ -204,3 +204,55 @@ func TestAdopt_ClosesTheStaleCheckMigration(t *testing.T) {
 	_, err = drv.Exec(ctx, `INSERT INTO quest_events (to_state) VALUES ('bogus')`)
 	assert.Error(t, err, "the restored CHECK should reject a value outside the set")
 }
+
+// PostgreSQL rewrites an index predicate when it stores it: IN (...) comes back
+// as = ANY (ARRAY[...]) with each element cast to the column type. Comparing
+// the text reports a difference on a database that matches its models, so
+// verify exits non-zero on a correct schema.
+func TestIntrospect_IndexPredicateIsNotComparedAsText(t *testing.T) {
+	ctx := context.Background()
+	drv := pgDriver(t)
+
+	models := []codegen.ModelInfo{{
+		Name: "UserQuest", TableName: "user_quests", PKType: "int",
+		Fields: []codegen.FieldInfo{
+			{
+				Name: "UserID", GoType: "string", ColumnName: "user_id", IsExported: true,
+				IndexNames: []codegen.IndexMembership{{
+					Name:   "uq_user_quests_one_active",
+					Unique: true,
+					Where:  "state IN ('assigned', 'in_progress')",
+				}},
+			},
+			{
+				Name: "State", GoType: "QuestState", LocalGoType: "QuestState",
+				ColumnName: "state", IsExported: true,
+				IsEnum: true, EnumValues: []string{"assigned", "in_progress", "done"}, EnumBaseType: "string",
+			},
+		},
+	}}
+
+	_, err := drv.Exec(ctx, codegen.GenerateSchema(models, "postgres"))
+	require.NoError(t, err)
+
+	live, err := introspect.Schema(ctx, drv, "postgres")
+	require.NoError(t, err)
+
+	// The server really did rewrite it: this is the condition under test.
+	var stored string
+	for _, tbl := range live.Tables {
+		for _, idx := range tbl.Indexes {
+			if idx.Name == "uq_user_quests_one_active" {
+				stored = idx.Where
+			}
+		}
+	}
+	require.NotEmpty(t, stored)
+	require.NotEqual(t, "state IN ('assigned', 'in_progress')", stored,
+		"the server stored the predicate verbatim; this test no longer covers the rewrite")
+
+	drift := codegen.CompareSchemas(live, codegen.BuildSchema(models, "postgres"))
+	assert.True(t, drift.Empty(),
+		"a database that matches its models must report no drift\nunmanaged: %+v\nmissing: %+v\ndifferent: %+v",
+		drift.Unmanaged, drift.Missing, drift.Different)
+}

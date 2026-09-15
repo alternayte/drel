@@ -266,10 +266,12 @@ func buildTable(m ModelInfo, fks map[string]string, dialect string) Table {
 			continue
 		}
 
-		// A single-column VO with an IsZero method opts in to the zero<->NULL bridge:
-		// its Value() returns nil for the zero value, so the column must be nullable.
-		// Otherwise, use the standard pointer-prefix heuristic.
-		notNull := !strings.HasPrefix(f.GoType, "*") && !(f.IsVO && f.HasIsZero)
+		// A single-column VO with an IsZero method opts in to the zero<->NULL
+		// bridge: its Value() returns nil for the zero value, so the column must
+		// be nullable. drel.Date is the exception -- its Value() never returns
+		// nil, so a nullable column would let a row hold NULL for a field that
+		// cannot express it. Otherwise, use the pointer-prefix heuristic.
+		notNull := !strings.HasPrefix(f.GoType, "*") && !(f.IsVO && f.HasIsZero && !f.IsDate)
 		c := Column{Name: f.ColumnName, NotNull: notNull, RenamedFrom: f.RenamedFrom}
 		var sqlType string
 		switch {

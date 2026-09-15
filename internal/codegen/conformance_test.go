@@ -275,8 +275,10 @@ func TestCodegenConformance(t *testing.T) {
 	assert.Contains(t, ddl, `CREATE INDEX IF NOT EXISTS "idx_indexed_recent" ON "indexeds" ("owner", "created_at");`)
 	assert.Contains(t, ddl, `CREATE UNIQUE INDEX IF NOT EXISTS "uq_indexed_live" ON "indexeds" ("owner") WHERE live;`)
 	assert.Contains(t, ddl, `"day" date`)
-	// drel.Date is a calendar date, not a timestamp.
-	assert.Contains(t, ddl, `"user_day" date`)
+	// drel.Date is a calendar date, not a timestamp, and its column is NOT NULL:
+	// Date.Value never writes nil, so a nullable column could hold a value the
+	// field cannot express.
+	assert.Contains(t, ddl, `"user_day" date NOT NULL`)
 
 	// The package compiles. This is the assertion that catches a rendering bug
 	// the string assertions above do not name.

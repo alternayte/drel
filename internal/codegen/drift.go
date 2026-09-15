@@ -50,9 +50,16 @@ func (d Drift) Empty() bool {
 //
 // Column types are compared through a small normalisation table, because the
 // server renders a type its own way: "character varying" for varchar,
-// "timestamp with time zone" for timestamptz. A CHECK expression is reported
-// but never compared: the server rewrites the predicate, so no textual
-// comparison holds.
+// "timestamp with time zone" for timestamptz.
+//
+// An expression is never compared as text, because the server rewrites one when
+// it stores it: `state IN ('a', 'b')` comes back as
+// `state = ANY (ARRAY['a'::questsate, 'b'::queststate])`. Matching that would
+// need a SQL parser, and comparing the text reports a difference on a database
+// that matches its models. So a CHECK expression is reported and never
+// compared, and an index predicate is compared by presence alone: an index that
+// gains or loses one is a difference, an index whose predicate is written
+// differently is not.
 func CompareSchemas(live, declared Schema) Drift {
 	var d Drift
 
@@ -163,7 +170,7 @@ func compareTable(d *Drift, live, declared Table) {
 			})
 			continue
 		}
-		if !li.SameShape(i) {
+		if !sameIndexIgnoringPredicateText(li, i) {
 			d.Different = append(d.Different, DriftItem{
 				Kind: "index", Table: live.Name, Name: i.Name,
 				Detail: fmt.Sprintf("database has %s, models declare %s", describeIndex(li), describeIndex(i)),
@@ -187,6 +194,19 @@ func compareTable(d *Drift, live, declared Table) {
 			})
 		}
 	}
+}
+
+// sameIndexIgnoringPredicateText compares two index shapes without comparing
+// the text of the predicate, for the reason given on CompareSchemas: the server
+// rewrites one when it stores it. The differ, which compares drel's own
+// rendering on both sides, uses Index.SameShape and does compare the text.
+func sameIndexIgnoringPredicateText(live, declared Index) bool {
+	if (live.Where == "") != (declared.Where == "") {
+		return false
+	}
+	stripped := declared
+	stripped.Where = live.Where
+	return live.SameShape(stripped)
 }
 
 func describeIndex(i Index) string {

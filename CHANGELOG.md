@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- A `drel.Date` field maps to a `NOT NULL` column. `Date` has an `IsZero`
+  method, which a value object normally uses to opt its column into the
+  zero<->NULL bridge, so the column came out nullable and a migration to it
+  emitted `DROP NOT NULL` and a `NULLIF` cast. `Date.Value` never writes nil, so
+  the bridge does not apply. Use a `*drel.Date` for a column that may hold NULL.
+- `drel migrate verify` no longer compares an index predicate as text.
+  PostgreSQL rewrites one when it stores it — `state IN ('a', 'b')` comes back
+  as `state = ANY (ARRAY['a'::t, 'b'::t])` — so verify reported a difference on
+  a database that matches its models and exited non-zero. An index that gains or
+  loses a predicate is still a difference; one written differently is not. The
+  migration differ compares drel's own rendering on both sides and still
+  compares the text, so a changed predicate recreates the index.
+
 ## [0.10.0] - 2026-09-15
 
 ### Added
