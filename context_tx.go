@@ -48,9 +48,11 @@ func MustFromContext(ctx context.Context) *Tx {
 //
 // A nested WithTx call on the same engine reuses the transaction from the
 // context and opens a savepoint. It does not begin a second transaction, and it
-// does not commit. An error from the nested call rolls back to the savepoint
-// only, and the outer call still decides the commit. A nested call returns
-// ErrNestedTxOptions if it carries transaction options.
+// does not commit. On success it flushes the tracked changes before releasing
+// the savepoint, so raw SQL after the call and the outer commit observe the same
+// state a top-level call would leave. An error from the nested call rolls back
+// to the savepoint only, and the outer call still decides the commit. A nested
+// call returns ErrNestedTxOptions if it carries transaction options.
 //
 // The behaviour is the same for Postgres, SQLite and LibSQL.
 func (e *Engine) WithTx(ctx context.Context, fn func(ctx context.Context) error, opts ...TxOption) error {

@@ -101,6 +101,14 @@ type TxBulkCopier interface {
 	CopyFrom(ctx context.Context, table string, columns []string, rows [][]any) (int64, error)
 }
 
+// TxUnderlyer is an optional Tx capability: it exposes the driver-native
+// transaction handle. The pgx driver returns pgx.Tx; database/sql-backed
+// drivers (SQLite, libSQL, WithSQLDB) return *sql.Tx. A caller that must join
+// the transaction with another library (a job queue, for example) uses it.
+type TxUnderlyer interface {
+	Underlying() any
+}
+
 // Driver abstracts database access for the drel engine.
 type Driver interface {
 	QueryRow(ctx context.Context, sql string, args ...any) Row

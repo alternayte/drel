@@ -31,6 +31,31 @@ func (tx *Tx) SaveChanges(ctx context.Context) error {
 	return nil
 }
 
+// Underlying returns the driver-native transaction handle: the pgx.Tx for a
+// Postgres engine, the *sql.Tx for SQLite, libSQL and WithSQLDB. A library that
+// must join the same transaction receives it directly, so a drel write and the
+// other library's write commit or roll back together:
+//
+//	err := engine.WithTx(ctx, func(ctx context.Context) error {
+//		tx := drel.MustFromContext(ctx)
+//		drel.NewTxRepository(tx, ItemMeta).Add(item)
+//		if err := tx.SaveChanges(ctx); err != nil {
+//			return err
+//		}
+//		_, err := river.InsertTx(ctx, tx.Underlying().(pgx.Tx), args, nil)
+//		return err
+//	})
+//
+// Call SaveChanges before handing the handle to another writer, so the rows
+// drel tracks are in the transaction. The method returns nil when the driver
+// exposes no native handle.
+func (tx *Tx) Underlying() any {
+	if u, ok := tx.dbTx.(driver.TxUnderlyer); ok {
+		return u.Underlying()
+	}
+	return nil
+}
+
 // Exec executes a raw SQL statement within the transaction. $N placeholders are
 // rewritten to ? on dialects that use ? (SQLite/libSQL).
 func (tx *Tx) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
@@ -130,12 +155,19 @@ func (tx *Tx) HardRemove(entity any) error {
 	return tx.tracker.MarkHardDeleted(entity)
 }
 
-// Savepoint runs fn within a nested SAVEPOINT. If fn returns nil the savepoint
-// is released; otherwise the transaction is rolled back to the savepoint and
-// the change tracker is reverted to its state before the savepoint, so entities
-// added inside fn are dropped and prior entities keep their earlier state. The
-// outer transaction continues either way. Savepoints may be nested, including
-// reusing the same name.
+// Savepoint runs fn within a nested SAVEPOINT. If fn returns nil the
+// savepoint's tracked changes are flushed, then the savepoint is released, so a
+// successful nested call leaves the same database state as a top-level one up
+// to the outer commit. Otherwise the transaction is rolled back to the
+// savepoint and the change tracker is reverted to its state before the
+// savepoint, so entities added inside fn are dropped and prior entities keep
+// their earlier state. The outer transaction continues either way. Savepoints
+// may be nested, including reusing the same name.
+//
+// A flush error on the success path also rolls back to the savepoint, so a
+// failed flush does not leave half of the savepoint's work in the transaction.
+// A RELEASE error cannot rewind the flush (the savepoint is already gone); the
+// error is returned and the caller must treat the transaction as broken.
 //
 // Note: rollback reverts the change tracker, not the in-memory Go structs. If a
 // flush inside fn populated generated fields on an entity (id, version,
@@ -155,25 +187,49 @@ func (tx *Tx) Savepoint(ctx context.Context, name string, fn func(sp *Tx) error)
 	}
 
 	if err := fn(tx); err != nil {
-		if _, rbErr := tx.execInternal(ctx, "ROLLBACK TO SAVEPOINT "+sp); rbErr != nil {
-			return fmt.Errorf("drel: rollback to savepoint %q: %w (while handling: %v)", name, rbErr, err)
+		if rbErr := tx.rewindSavepoint(ctx, name, sp, savedTracker, savedEvents, err); rbErr != nil {
+			return rbErr
 		}
-		// Release the (now rewound) savepoint so its name is reusable.
-		_, _ = tx.execInternal(ctx, "RELEASE SAVEPOINT "+sp)
-		tx.tracker.restore(savedTracker)
-		tx.heldEvents = tx.heldEvents[:savedEvents]
 		return err
 	}
 
+	// Flush the savepoint's tracked changes before RELEASE, so raw SQL and the
+	// outer call observe them, and so a failed flush rewinds with the savepoint
+	// instead of surfacing at the outer commit (issue #12).
+	events, err := flushChanges(ctx, tx, tx.engine.dialect(), tx.tracker)
+	if err != nil {
+		if rbErr := tx.rewindSavepoint(ctx, name, sp, savedTracker, savedEvents, err); rbErr != nil {
+			return rbErr
+		}
+		return err
+	}
+	tx.heldEvents = append(tx.heldEvents, events...)
+
 	if _, err := tx.execInternal(ctx, "RELEASE SAVEPOINT "+sp); err != nil {
 		// RELEASE failed even though fn succeeded (e.g. broken connection).
-		// Mirror the rollback branch: revert the tracker and held events so
-		// tracker state is consistent on every error exit and the savepoint's
-		// staged work is not re-flushed by the outer transaction.
+		// The flush is already in the transaction; restore the tracker and
+		// held events so tracker state is consistent on every error exit and
+		// the savepoint's staged work is not re-flushed by the outer
+		// transaction.
 		tx.tracker.restore(savedTracker)
 		tx.heldEvents = tx.heldEvents[:savedEvents]
 		return fmt.Errorf("drel: release savepoint %q: %w", name, err)
 	}
+	return nil
+}
+
+// rewindSavepoint rolls the database and the change tracker back to the
+// savepoint and releases the rewound savepoint so its name is reusable. It
+// reports only a rollback failure; the caller owns the cause and returns it
+// when the rewind succeeds.
+func (tx *Tx) rewindSavepoint(ctx context.Context, name, sp string, saved trackerState, savedEvents int, cause error) error {
+	if _, rbErr := tx.execInternal(ctx, "ROLLBACK TO SAVEPOINT "+sp); rbErr != nil {
+		return fmt.Errorf("drel: rollback to savepoint %q: %w (while handling: %v)", name, rbErr, cause)
+	}
+	// Release the (now rewound) savepoint so its name is reusable.
+	_, _ = tx.execInternal(ctx, "RELEASE SAVEPOINT "+sp)
+	tx.tracker.restore(saved)
+	tx.heldEvents = tx.heldEvents[:savedEvents]
 	return nil
 }
 

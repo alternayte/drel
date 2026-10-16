@@ -857,6 +857,43 @@ type Doc struct {
 	require.NoError(t, err, "generated code failed to compile:\n%s", out)
 }
 
+// TestGenerate_JSONNonComparableSliceCompiles pins issue #14. A JSON column
+// whose Go type is an unnamed slice of a struct that is not comparable cannot
+// use slices.Equal, so the generated diff must fall back to drel.JSONEqual.
+// Before the fix the generator reported no error and `go build` failed in the
+// generated file.
+func TestGenerate_JSONNonComparableSliceCompiles(t *testing.T) {
+	dir := setupGenerateModule(t, map[string]string{
+		"models/summary.go": `package models
+
+import "github.com/alternayte/drel"
+
+type Claim struct {
+	Text    string  ` + "`json:\"text\"`" + `
+	ItemIDs []int64 ` + "`json:\"item_ids\"`" + `
+}
+
+type Summary struct {
+	drel.Model[int64]
+	Claims []Claim ` + "`db:\"claims\"`" + `
+}
+`,
+		"drel.yaml": "packages:\n  - ./models\noutput:\n  db: ./db/drel_gen.go\ndialect: postgres\n",
+	})
+
+	require.NoError(t, Generate(filepath.Join(dir, "drel.yaml")))
+
+	generated, err := os.ReadFile(filepath.Join(dir, "models", "summary_drel.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(generated), "!drel.JSONEqual(p.Claims, s.Claims)")
+	assert.NotContains(t, string(generated), "slices.Equal")
+
+	cmd := exec.Command("go", "build", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "generated code failed to compile:\n%s", out)
+}
+
 // TestGenerate_ModelPackageUsesItsOwnGeneratedSymbols pins issue #10. A module
 // owns its models, so the slice code that uses the repositories lives in the
 // model package. That code names the generated symbols (XMeta, the column set,
@@ -964,4 +1001,139 @@ output:
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "undefined: WidgteMeta")
 	assert.NoFileExists(t, filepath.Join(dir, "models", "widget_drel.go"))
+}
+
+// TestGenerate_CrossModuleGeneratedSymbols pins issue #13. A pipeline slice
+// reads another slice's rows in one transaction, so a hand-written file in one
+// scanned package names the generated symbols of another scanned package. The
+// scan must accept them exactly as it accepts a package's own symbols, and
+// still fail on any other undefined name.
+func TestGenerate_CrossModuleGeneratedSymbols(t *testing.T) {
+	dir := setupGenerateModule(t, map[string]string{
+		"internal/ingest/item.go": `package ingest
+
+import "github.com/alternayte/drel"
+
+type Item struct {
+	drel.Model[int64]
+	Status string ` + "`db:\"status\"`" + `
+}
+`,
+		"internal/stories/story.go": `package stories
+
+import "github.com/alternayte/drel"
+
+type Story struct {
+	drel.Model[int64]
+	Title string ` + "`db:\"title\"`" + `
+}
+`,
+		"internal/stories/filter.go": `package stories
+
+import (
+	"context"
+
+	"testmod/internal/ingest"
+
+	"github.com/alternayte/drel"
+)
+
+func findItems(ctx context.Context) ([]*ingest.Item, error) {
+	repo := drel.NewTxRepository(drel.MustFromContext(ctx), ingest.ItemMeta)
+	return repo.Where(ingest.Items.Status.Eq("new")).All(ctx)
+}
+`,
+		// An explicit import alias must resolve too: types.Imports reports the
+		// declared package name, not the alias, so this exercises the syntax pass.
+		"internal/stories/alias.go": `package stories
+
+import ig "testmod/internal/ingest"
+
+var _ = ig.ItemMeta
+var _ ig.Item
+`,
+		"drel.yaml": `modules:
+  - name: ingest
+    packages: [./internal/ingest]
+  - name: stories
+    packages: [./internal/stories]
+output:
+  db: ./db/drel_gen.go
+`,
+	})
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { os.Chdir(origDir) })
+	require.NoError(t, os.Chdir(dir))
+
+	require.NoError(t, Generate("drel.yaml"))
+	assert.FileExists(t, filepath.Join(dir, "internal", "ingest", "item_drel.go"))
+	assert.FileExists(t, filepath.Join(dir, "internal", "stories", "story_drel.go"))
+
+	// A model change must regenerate while stories still names ingest's
+	// generated symbols.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "internal", "ingest", "item.go"), []byte(`package ingest
+
+import "github.com/alternayte/drel"
+
+type Item struct {
+	drel.Model[int64]
+	Status string `+"`db:\"status\"`"+`
+	Note   string `+"`db:\"note\"`"+`
+}
+`), 0644))
+	require.NoError(t, Generate("drel.yaml"))
+
+	content, err := os.ReadFile(filepath.Join(dir, "internal", "ingest", "item_drel.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), `"note"`)
+	assert.Contains(t, string(content), `"status"`)
+
+	build := exec.Command("go", "build", "./...")
+	build.Dir = dir
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "go build failed: %s", string(out))
+}
+
+// TestGenerate_RejectsUndefinedCrossModuleName proves the cross-module
+// tolerance is narrow: a qualified name that generation will not emit fails.
+func TestGenerate_RejectsUndefinedCrossModuleName(t *testing.T) {
+	dir := setupGenerateModule(t, map[string]string{
+		"internal/ingest/item.go": `package ingest
+
+import "github.com/alternayte/drel"
+
+type Item struct {
+	drel.Model[int64]
+	Status string ` + "`db:\"status\"`" + `
+}
+`,
+		"internal/stories/filter.go": `package stories
+
+import "testmod/internal/ingest"
+
+func findItems() {
+	_ = ingest.BogusMeta
+}
+`,
+		"drel.yaml": `modules:
+  - name: ingest
+    packages: [./internal/ingest]
+  - name: stories
+    packages: [./internal/stories]
+output:
+  db: ./db/drel_gen.go
+`,
+	})
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { os.Chdir(origDir) })
+	require.NoError(t, os.Chdir(dir))
+
+	err = Generate("drel.yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "undefined: ingest.BogusMeta")
+	assert.NoFileExists(t, filepath.Join(dir, "internal", "ingest", "item_drel.go"))
 }

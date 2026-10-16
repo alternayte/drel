@@ -5,6 +5,36 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- `Tx.Underlying()` returns the driver-native transaction handle: the `pgx.Tx`
+  on Postgres, the `*sql.Tx` on SQLite, libSQL and `WithSQLDB`. A library that
+  must join the same transaction — a job queue that inserts with the caller's
+  transaction, for example — receives it directly. Call `SaveChanges` first, so
+  the rows drel tracks are in the transaction before the other writer runs.
+
+### Fixed
+
+- A successful savepoint — and so a nested `WithTx` call — flushes its tracked
+  changes before `RELEASE SAVEPOINT`. Raw SQL in the outer transaction and the
+  outer commit now observe the nested call's writes, exactly as a top-level
+  call's commit would leave them. A flush error on that path rolls the
+  savepoint back and restores the change tracker, instead of surfacing at the
+  outer commit.
+- `drel generate` accepts a reference to another scanned package's generated
+  symbols, with the importing package as a module of its own. A pipeline slice
+  can read another slice's rows in one transaction — `ingest.ItemMeta`,
+  `ingest.Items` — the `db.Modules.<Slice>` design intends this, and the scan
+  rejected it. An undefined name the run will not emit still fails the scan.
+- A JSON column whose Go type is an unnamed slice or map with a non-comparable
+  element type diffs with `drel.JSONEqual` instead of `slices.Equal` /
+  `maps.Equal`, which did not compile. The generator now decides comparability
+  from the element type and falls back to the marshal comparison, as it already
+  did for a named slice type. A comparable element type keeps the cheaper
+  `slices.Equal` / `maps.Equal`.
+
 ## [0.10.2] - 2026-10-16
 
 ### Fixed

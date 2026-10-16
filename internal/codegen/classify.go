@@ -59,6 +59,24 @@ func (k FieldKind) String() string {
 	}
 }
 
+// jsonElemsComparable reports whether slices.Equal or maps.Equal can compare
+// the contents of a JSON container. Both need a comparable element type (a
+// map's value type), so an unnamed slice of a struct that holds a slice — the
+// case that made a generated diff fail to compile — falls back to comparing
+// marshaled bytes. Pointers are unwrapped, matching classifyField.
+func jsonElemsComparable(t types.Type) bool {
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Slice:
+		return types.Comparable(u.Elem())
+	case *types.Map:
+		return types.Comparable(u.Elem())
+	}
+	return false
+}
+
 // isByteSlice reports whether t is []byte (after unwrapping a pointer).
 func isByteSlice(t types.Type) bool {
 	if ptr, ok := t.(*types.Pointer); ok {

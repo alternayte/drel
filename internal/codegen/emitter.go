@@ -249,10 +249,10 @@ func emitImports(b *strings.Builder, m ModelInfo, extAliases map[string]string) 
 		if f.IsMultiColVO {
 			stdImports["fmt"] = true
 		}
-		if f.IsJSON && isSliceGoType(f.GoType) {
+		if f.IsJSON && isSliceGoType(f.GoType) && f.JSONElemsComparable {
 			stdImports["slices"] = true
 		}
-		if f.IsJSON && isMapGoType(f.GoType) {
+		if f.IsJSON && isMapGoType(f.GoType) && f.JSONElemsComparable {
 			stdImports["maps"] = true
 		}
 	}
@@ -682,20 +682,23 @@ func emitDiff(b *strings.Builder, m ModelInfo, lower string, aliases map[string]
 		}
 		valExpr := fmt.Sprintf("p.%s", f.Name)
 		switch {
-		case f.IsJSON && isSliceGoType(f.GoType):
+		case f.IsJSON && isSliceGoType(f.GoType) && f.JSONElemsComparable:
 			b.WriteString(fmt.Sprintf("\tif !slices.Equal(p.%s, s.%s) {\n", f.Name, f.Name))
 			if usesJSONWrapper(f) {
 				valExpr = fmt.Sprintf("drel.JSON[%s]{V: &p.%s}", fieldDisplayType(f, aliases), f.Name)
 			}
-		case f.IsJSON && isMapGoType(f.GoType):
+		case f.IsJSON && isMapGoType(f.GoType) && f.JSONElemsComparable:
 			b.WriteString(fmt.Sprintf("\tif !maps.Equal(p.%s, s.%s) {\n", f.Name, f.Name))
 			if usesJSONWrapper(f) {
 				valExpr = fmt.Sprintf("drel.JSON[%s]{V: &p.%s}", fieldDisplayType(f, aliases), f.Name)
 			}
 		case f.IsJSON:
-			// Struct/other JSON: compare marshaled bytes; emit drel.JSONEqual helper.
+			// Struct, or a slice/map whose element type is not comparable:
+			// compare marshaled bytes; emit drel.JSONEqual helper.
 			b.WriteString(fmt.Sprintf("\tif !drel.JSONEqual(p.%s, s.%s) {\n", f.Name, f.Name))
-			valExpr = fmt.Sprintf("drel.JSON[%s]{V: &p.%s}", fieldDisplayType(f, aliases), f.Name)
+			if usesJSONWrapper(f) {
+				valExpr = fmt.Sprintf("drel.JSON[%s]{V: &p.%s}", fieldDisplayType(f, aliases), f.Name)
+			}
 		default:
 			cond := fmt.Sprintf("p.%s != s.%s", f.Name, f.Name)
 			if f.IsVO && f.HasEqual {

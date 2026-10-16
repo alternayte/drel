@@ -102,6 +102,8 @@ func (r *sqlRows) Err() error             { return r.rows.Err() }
 
 type sqlTx struct{ tx *sql.Tx }
 
+var _ driver.TxUnderlyer = (*sqlTx)(nil)
+
 func (t *sqlTx) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
 	return t.tx.QueryRowContext(ctx, query, args...)
 }
@@ -124,3 +126,8 @@ func (t *sqlTx) Exec(ctx context.Context, query string, args ...any) (int64, err
 
 func (t *sqlTx) Commit(ctx context.Context) error   { return t.tx.Commit() }
 func (t *sqlTx) Rollback(ctx context.Context) error { return t.tx.Rollback() }
+
+// Underlying exposes the *sql.Tx the wrapper drives. It implements
+// driver.TxUnderlyer, so a caller can join the transaction with a library that
+// takes a *sql.Tx.
+func (t *sqlTx) Underlying() any { return t.tx }

@@ -112,8 +112,11 @@ err = database.Transaction(ctx, func(tx *drel.Tx) error {
   read-only transactions (`WithReadOnly`), advisory locks
   (`Tx.AdvisoryLock` / `TryAdvisoryLock`; a SQLite no-op), automatic retry on
   serialization failures (`TransactionWithRetry` / `WithRetry`), and automatic
-  flush on commit. Projections, includes, bulk operations, and batching all run
-  on the transaction's own connection inside an explicit `Tx`.
+  flush on commit. A nested `WithTx` call flushes before it releases its
+  savepoint, and `Tx.Underlying()` returns the native `pgx.Tx` / `*sql.Tx` so
+  another library joins the same transaction. Projections, includes, bulk
+  operations, and batching all run on the transaction's own connection inside
+  an explicit `Tx`.
 - **Soft delete, versioning, audit** -- embed `drel.SoftDelete`,
   `drel.Versioned`, or `drel.Audit` for automatic column management.
 - **Primary keys** -- integer auto-increment by default, or application-assigned

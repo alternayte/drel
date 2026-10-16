@@ -592,13 +592,19 @@ type Settings struct {
 	Theme string ` + "`json:\"theme\"`" + `
 }
 
+type Claim struct {
+	Text    string  ` + "`json:\"text\"`" + `
+	ItemIDs []int64 ` + "`json:\"item_ids\"`" + `
+}
+
 type Doc struct {
 	drel.Model[int]
-	Tags  []string          ` + "`db:\"tags\"`" + `
-	Nums  []int             ` + "`db:\"nums\"`" + `
-	Meta  map[string]string ` + "`db:\"meta\"`" + `
-	Prefs Settings          ` + "`db:\"prefs\"`" + `
-	Arr   []string          ` + "`db:\"arr,type=text[]\"`" + `
+	Tags   []string          ` + "`db:\"tags\"`" + `
+	Nums   []int             ` + "`db:\"nums\"`" + `
+	Meta   map[string]string ` + "`db:\"meta\"`" + `
+	Prefs  Settings          ` + "`db:\"prefs\"`" + `
+	Arr    []string          ` + "`db:\"arr,type=text[]\"`" + `
+	Claims []Claim           ` + "`db:\"claims\"`" + `
 }
 `,
 	})
@@ -616,14 +622,17 @@ type Doc struct {
 	assert.True(t, byName["Tags"].IsArray, "Tags should be IsArray")
 	assert.True(t, byName["Tags"].IsJSON, "Tags should be IsJSON (slices serialize as JSON by default)")
 	assert.Empty(t, byName["Tags"].TypeOverride)
+	assert.True(t, byName["Tags"].JSONElemsComparable, "[]string elements are comparable")
 
 	// []int default -> JSON array
 	assert.True(t, byName["Nums"].IsArray)
 	assert.True(t, byName["Nums"].IsJSON)
+	assert.True(t, byName["Nums"].JSONElemsComparable)
 
 	// map -> JSON (object), not an array
 	assert.True(t, byName["Meta"].IsJSON)
 	assert.False(t, byName["Meta"].IsArray)
+	assert.True(t, byName["Meta"].JSONElemsComparable)
 
 	// plain struct with json affinity -> JSON
 	assert.True(t, byName["Prefs"].IsJSON)
@@ -632,6 +641,12 @@ type Doc struct {
 	// explicit type override is recorded verbatim
 	assert.Equal(t, "text[]", byName["Arr"].TypeOverride)
 	assert.True(t, byName["Arr"].IsArray)
+
+	// []Claim is not comparable (Claim holds a slice), so slices.Equal cannot
+	// be used for its diff (issue #14).
+	assert.True(t, byName["Claims"].IsJSON)
+	assert.True(t, byName["Claims"].IsArray)
+	assert.False(t, byName["Claims"].JSONElemsComparable)
 }
 
 // TestParseDBTag_TypeOverride_Scanner verifies that the type= db tag option is

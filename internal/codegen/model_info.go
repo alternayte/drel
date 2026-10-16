@@ -119,6 +119,10 @@ type FieldInfo struct {
 	TypeOverride string // db tag option: explicit SQL type (db:"...,type=jsonb"); overrides inference
 	IsJSON       bool   // map/slice/struct mapped as JSON/jsonb (default for non-primitive, non-VO, non-enum container types)
 	IsArray      bool   // slice field (JSON array by default; native T[] when TypeOverride is set on Postgres)
+	// JSONElemsComparable reports that slices.Equal/maps.Equal can compare a
+	// JSON container's contents: its element type (slice) or value type (map)
+	// is comparable. False means the diff must compare marshaled bytes.
+	JSONElemsComparable bool
 }
 
 // IndexMembership is one named index a column joins. Unique and Where are

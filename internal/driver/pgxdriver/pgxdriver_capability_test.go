@@ -9,4 +9,5 @@ import (
 var (
 	_ driver.BulkCopier   = (*PgxDriver)(nil)
 	_ driver.TxBulkCopier = (*pgxTx)(nil)
+	_ driver.TxUnderlyer  = (*pgxTx)(nil)
 )

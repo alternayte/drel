@@ -61,8 +61,23 @@ func scanPackages(patterns []string, dir string, tolerateGeneratedRefs bool) ([]
 	}
 
 	var models []ModelInfo
+	// The names the run will emit, per scanned package. A hand-written file may
+	// reference them (in its own package, or through an import of another
+	// scanned package) after generation removed the files that declared them.
+	// Checked against every package before the per-package error check, because
+	// the referencing package needs the symbols of the package it imports.
+	var emitted map[string]map[string]bool
+	if tolerateGeneratedRefs {
+		emitted = make(map[string]map[string]bool, len(pkgs))
+		for _, pkg := range pkgs {
+			if pkg.Types == nil {
+				continue
+			}
+			emitted[pkg.PkgPath] = emittedSymbols(pkg.Types.Scope())
+		}
+	}
 	for _, pkg := range pkgs {
-		if err := checkPackageErrors(pkg, tolerateGeneratedRefs); err != nil {
+		if err := checkPackageErrors(pkg, emitted); err != nil {
 			return nil, err
 		}
 		pkgModels, err := scanPackage(pkg)
@@ -86,26 +101,26 @@ func scanPackages(patterns []string, dir string, tolerateGeneratedRefs bool) ([]
 }
 
 // checkPackageErrors reports the first package error that tolerance does not
-// explain. With tolerateGeneratedRefs, a type error "undefined: X" is accepted
-// when X is a symbol the emitter declares for a model of this package: the
-// generated file that declared it was removed for the scan and is about to be
-// rewritten. The go list error carries the compiler's copy of the same
-// diagnostics, so each of its lines must also name a tolerated position.
-func checkPackageErrors(pkg *packages.Package, tolerateGeneratedRefs bool) error {
+// explain. With a non-nil emitted map, a type error "undefined: X" is accepted
+// when X is a symbol the emitter declares for a model of this package or of
+// another scanned package (as pkg.X): the generated file that declared it was
+// removed for the scan and is about to be rewritten. The go list error carries
+// the compiler's copy of the same diagnostics, so each of its lines must also
+// name a tolerated position.
+func checkPackageErrors(pkg *packages.Package, emitted map[string]map[string]bool) error {
 	if len(pkg.Errors) == 0 {
 		return nil
 	}
-	if !tolerateGeneratedRefs || pkg.Types == nil {
+	if emitted == nil || pkg.Types == nil {
 		return fmt.Errorf("codegen: package %s has errors: %v", pkg.PkgPath, pkg.Errors[0])
 	}
 
-	emitted := emittedSymbols(pkg.Types.Scope())
 	tolerated := make(map[string]bool)
 	var firstFatal *packages.Error
 	for i := range pkg.Errors {
 		e := &pkg.Errors[i]
 		if e.Kind == packages.TypeError {
-			if name, ok := undefinedName(e.Msg); ok && emitted[name] {
+			if name, ok := undefinedName(e.Msg); ok && emittedName(pkg, emitted, name) {
 				tolerated[errorPositionKey(e.Pos)] = true
 				continue
 			}
@@ -130,6 +145,56 @@ func checkPackageErrors(pkg *packages.Package, tolerateGeneratedRefs bool) error
 		}
 	}
 	return nil
+}
+
+// emittedName reports whether the undefined identifier names a symbol the run
+// will emit. A bare name must belong to a model of the package that names it.
+// A qualified name pkg.Symbol must resolve, through the package's imports, to
+// another scanned package whose models emit that symbol. Issue #13: a pipeline
+// slice reads another slice's rows and names ingest.ItemMeta, and the scan
+// rejected it while the package that will declare it was scanned too.
+func emittedName(pkg *packages.Package, emitted map[string]map[string]bool, name string) bool {
+	qual, symbol, qualified := strings.Cut(name, ".")
+	if !qualified {
+		return emitted[pkg.PkgPath][name]
+	}
+	if symbol == "" {
+		return false
+	}
+	importPath, ok := importedPath(pkg, qual)
+	if !ok {
+		return false
+	}
+	return emitted[importPath][symbol]
+}
+
+// importedPath resolves an identifier qualifier to the import path of the
+// package it names. types.Imports covers a package whose declared name is not
+// its path base; the syntax pass covers an explicit import alias.
+func importedPath(pkg *packages.Package, qual string) (string, bool) {
+	if pkg.Types != nil {
+		for _, imp := range pkg.Types.Imports() {
+			if imp.Name() == qual {
+				return imp.Path(), true
+			}
+		}
+	}
+	for _, file := range pkg.Syntax {
+		for _, spec := range file.Imports {
+			importPath, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				continue
+			}
+			name := path.Base(importPath)
+			if spec.Name != nil && spec.Name.Name != "" {
+				name = spec.Name.Name
+			}
+			if name == qual {
+				return importPath, true
+			}
+		}
+	}
+	return "", false
 }
 
 // emittedSymbols returns every package-level name EmitModelFile declares for a
@@ -665,6 +730,7 @@ func extractFields(st *types.Struct, ownerPkgPath string) ([]FieldInfo, error) {
 			case KindJSON:
 				fi.IsJSON = true
 				fi.IsArray = isSliceType(f.Type())
+				fi.JSONElemsComparable = jsonElemsComparable(f.Type())
 			}
 		}
 

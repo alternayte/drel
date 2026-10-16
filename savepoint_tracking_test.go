@@ -136,13 +136,12 @@ func TestSavepoint_NestedSameName(t *testing.T) {
 	assert.Equal(t, 2, countItems(t, engine))
 }
 
-// On the SUCCESS path, if RELEASE SAVEPOINT fails the savepoint's staged adds
-// must be reverted from the tracker (mirroring the rollback branch) so the
-// outer commit does not re-flush them. We provoke a deterministic RELEASE
-// failure by pre-releasing the framework's savepoint inside fn: the first
-// savepoint named "rel" in a fresh tx is emitted as "sp_rel_1"
-// (sanitizeSavepoint prefixes "sp_", then the per-tx counter appends "_1").
-func TestSavepoint_ReleaseFailureSuccessPath_RevertsTracker(t *testing.T) {
+// On the SUCCESS path, the savepoint's tracked changes flush before RELEASE
+// (issue #12). If RELEASE then fails (provoked here by pre-releasing the
+// framework's savepoint, name "sp_rel_1"), the error must surface, the tracker
+// must be reverted so the outer commit does not re-flush, and the flushed
+// insert stays in the transaction because only a full rollback can rewind it.
+func TestSavepoint_ReleaseFailureAfterFlushReturnsError(t *testing.T) {
 	engine := setupSQLiteEngine(t)
 	ctx := context.Background()
 
@@ -153,26 +152,93 @@ func TestSavepoint_ReleaseFailureSuccessPath_RevertsTracker(t *testing.T) {
 		}
 
 		spErr := tx.Savepoint(ctx, "rel", func(sp *drel.Tx) error {
-			// Stage an add but do NOT flush it inside the savepoint, so it is
-			// still pending in the tracker when RELEASE runs.
-			drel.NewTxRepository(sp, sqliteItemMeta).Add(&sqliteItem{Title: "inner-staged"})
+			// Stage an add; Savepoint itself flushes it before RELEASE.
+			drel.NewTxRepository(sp, sqliteItemMeta).Add(&sqliteItem{Title: "inner"})
 			// Pre-release the framework's savepoint so the framework's own
 			// RELEASE on the success path fails ("no such savepoint").
 			_, _ = sp.Exec(ctx, "RELEASE SAVEPOINT sp_rel_1")
-			return nil // success path -> framework RELEASE now fails
+			return nil
 		})
-		// The RELEASE failure must surface as an error.
 		require.Error(t, spErr)
 		require.Contains(t, spErr.Error(), "release savepoint")
-		// Swallow it so the outer transaction still commits; the staged inner
-		// add must have been reverted and therefore NOT flushed.
+		// Swallow it so the outer transaction still commits; the flushed inner
+		// insert is already in the transaction and commits with it.
 		return nil
 	})
 	require.NoError(t, err)
 
-	// Only "outer" must survive. Before the fix, "inner-staged" leaks into the
-	// outer commit (count == 2).
-	assert.Equal(t, 1, countItems(t, engine))
+	assert.Equal(t, 2, countItems(t, engine))
+}
+
+// TestSavepoint_FlushFailureOnSuccessPathRollsBack pins the other half of issue
+// #12: the success-path flush runs inside the savepoint, so a flush error
+// rewinds the savepoint and restores the tracker instead of surfacing at the
+// outer commit.
+func TestSavepoint_FlushFailureOnSuccessPathRollsBack(t *testing.T) {
+	engine := setupSQLiteEngine(t)
+	ctx := context.Background()
+	insertItem(t, engine, "existing")
+
+	err := engine.Transaction(ctx, func(tx *drel.Tx) error {
+		drel.NewTxRepository(tx, sqliteItemMeta).Add(&sqliteItem{Title: "keep"})
+		spErr := tx.Savepoint(ctx, "flush-fails", func(sp *drel.Tx) error {
+			// StateModified force-updates every column; a missing PK makes the
+			// update affect zero rows, which the flush reports as an error.
+			ghost := &sqliteItem{ID: 4242, Title: "ghost"}
+			drel.NewTxRepository(sp, sqliteItemMeta).Attach(ghost, drel.StateModified)
+			return nil // success path -> flush before RELEASE
+		})
+		require.Error(t, spErr)
+		require.Contains(t, spErr.Error(), "no rows affected")
+		// Swallow it so the outer transaction commits; "keep" must still land.
+		return nil
+	})
+	require.NoError(t, err)
+
+	// "existing" and "keep"; the ghost row was never written and the failed
+	// savepoint's tracked work was dropped.
+	assert.Equal(t, 2, countItems(t, engine))
+}
+
+// TestWithTx_NestedFlushesOnRelease pins the reported shape of issue #12. A
+// nested WithTx call inside a dreltest-style sandbox behaves like a top-level
+// one: the raw SQL after the call, in the same transaction, observes the
+// tracked change because Savepoint flushes before RELEASE.
+func TestWithTx_NestedFlushesOnRelease(t *testing.T) {
+	engine := setupSQLiteEngine(t)
+	ctx := context.Background()
+	id := insertItem(t, engine, "new")
+
+	err := engine.WithTx(ctx, func(ctx context.Context) error {
+		// A write function written as if it owned the transaction; here it is
+		// nested, so it joins through a savepoint.
+		err := engine.WithTx(ctx, func(ctx context.Context) error {
+			item, err := drel.NewTxRepository(drel.MustFromContext(ctx), sqliteItemMeta).Find(ctx, id)
+			if err != nil {
+				return err
+			}
+			item.Title = "done"
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		// Raw SQL in the outer transaction must observe the nested change.
+		var title string
+		if err := drel.MustFromContext(ctx).QueryRow(ctx, `SELECT title FROM items WHERE id = $1`, id).Scan(&title); err != nil {
+			return err
+		}
+		if title != "done" {
+			return fmt.Errorf("nested WithTx did not flush: title = %q, want %q", title, "done")
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	found, err := drel.NewRepository(engine, sqliteItemMeta).Find(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, "done", found.Title)
 }
 
 func TestAttach_UnchangedInsertOnlyMetaDoesNotPanic(t *testing.T) {

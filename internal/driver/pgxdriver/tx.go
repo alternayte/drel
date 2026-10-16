@@ -44,3 +44,8 @@ func (t *pgxTx) Rollback(ctx context.Context) error {
 func (t *pgxTx) CopyFrom(ctx context.Context, table string, columns []string, rows [][]any) (int64, error) {
 	return t.tx.CopyFrom(ctx, pgx.Identifier{table}, columns, pgx.CopyFromRows(rows))
 }
+
+// Underlying exposes the pgx.Tx the wrapper drives. It implements
+// driver.TxUnderlyer, so a caller can join the transaction with a library that
+// takes a pgx.Tx (a job queue, for example).
+func (t *pgxTx) Underlying() any { return t.tx }

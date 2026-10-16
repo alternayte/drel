@@ -701,8 +701,8 @@ func TestEmitModelFile_JSONColumns(t *testing.T) {
 		PKType:    "int",
 		TableName: "docs",
 		Fields: []FieldInfo{
-			{Name: "Tags", GoType: "[]string", ColumnName: "tags", LocalGoType: "[]string", IsJSON: true, IsArray: true},
-			{Name: "Meta", GoType: "map[string]string", ColumnName: "meta", LocalGoType: "map[string]string", IsJSON: true},
+			{Name: "Tags", GoType: "[]string", ColumnName: "tags", LocalGoType: "[]string", IsJSON: true, IsArray: true, JSONElemsComparable: true},
+			{Name: "Meta", GoType: "map[string]string", ColumnName: "meta", LocalGoType: "map[string]string", IsJSON: true, JSONElemsComparable: true},
 		},
 	}
 
@@ -739,7 +739,7 @@ func TestEmitModelFile_NativeArrayOverride_PassesSliceThrough(t *testing.T) {
 	m := ModelInfo{
 		Name: "Doc", PkgName: "models", PKType: "int", TableName: "docs",
 		Fields: []FieldInfo{
-			{Name: "Arr", GoType: "[]string", ColumnName: "arr", LocalGoType: "[]string", IsJSON: true, IsArray: true, TypeOverride: "text[]"},
+			{Name: "Arr", GoType: "[]string", ColumnName: "arr", LocalGoType: "[]string", IsJSON: true, IsArray: true, TypeOverride: "text[]", JSONElemsComparable: true},
 		},
 	}
 	out := EmitModelFile(m)
@@ -748,6 +748,26 @@ func TestEmitModelFile_NativeArrayOverride_PassesSliceThrough(t *testing.T) {
 	assert.NotContains(t, out, "drel.JSON[[]string]{V: &p.Arr}")
 	// Diff still uses slices.Equal (slices are not !=-comparable regardless of DDL).
 	assert.Contains(t, out, "!slices.Equal(p.Arr, s.Arr)")
+}
+
+// TestEmitModelFile_JSONNonComparableSliceDiff pins issue #14. An unnamed slice
+// of a struct that is not comparable cannot use slices.Equal; the emitter must
+// fall back to drel.JSONEqual (as it already did for a named slice type) and
+// must not import "slices".
+func TestEmitModelFile_JSONNonComparableSliceDiff(t *testing.T) {
+	m := ModelInfo{
+		Name: "Summary", PkgName: "models", PKType: "int", TableName: "summaries",
+		Fields: []FieldInfo{
+			{Name: "Claims", GoType: "[]Claim", ColumnName: "claims", LocalGoType: "[]Claim", IsJSON: true, IsArray: true},
+		},
+	}
+
+	out := EmitModelFile(m)
+
+	assert.Contains(t, out, "!drel.JSONEqual(p.Claims, s.Claims)")
+	assert.NotContains(t, out, "slices.Equal")
+	assert.NotContains(t, out, `"slices"`)
+	assert.Contains(t, out, "drel.JSON[[]Claim]{V: &p.Claims}")
 }
 
 // TestEmitModelFileChecked_RejectsUnmappableType asserts that EmitModelFileChecked
