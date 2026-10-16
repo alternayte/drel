@@ -9,12 +9,37 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
 
+// ScanPackages loads the packages that match patterns and returns the drel
+// models declared in them. A package with any load, parse or type error fails
+// the scan: the caller needs the complete model set.
 func ScanPackages(patterns []string, dir ...string) ([]ModelInfo, error) {
+	return scanPackages(patterns, firstDir(dir), false)
+}
+
+// ScanPackagesForGenerate is ScanPackages as the generator needs it. A
+// hand-written file in a model package may use that package's own generated
+// symbols (XMeta, XRepository, TxXRepository, the column set). Generation
+// removes every *_drel.go file before the scan, so those references read as
+// "undefined" and would fail a strict scan. They name exactly what generation
+// is about to emit, so the scan accepts them and fails on everything else.
+func ScanPackagesForGenerate(patterns []string, dir string) ([]ModelInfo, error) {
+	return scanPackages(patterns, dir, true)
+}
+
+func firstDir(dir []string) string {
+	if len(dir) > 0 {
+		return dir[0]
+	}
+	return ""
+}
+
+func scanPackages(patterns []string, dir string, tolerateGeneratedRefs bool) ([]ModelInfo, error) {
 	// The mode deliberately omits NeedDeps and NeedImports. NeedDeps applies the
 	// other bits transitively, so NeedSyntax|NeedTypesInfo would make every load
 	// re-parse and re-type-check drel and its whole dependency graph from source.
@@ -27,8 +52,8 @@ func ScanPackages(patterns []string, dir ...string) ([]ModelInfo, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedName | packages.NeedFiles,
 	}
-	if len(dir) > 0 && dir[0] != "" {
-		cfg.Dir = dir[0]
+	if dir != "" {
+		cfg.Dir = dir
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -37,8 +62,8 @@ func ScanPackages(patterns []string, dir ...string) ([]ModelInfo, error) {
 
 	var models []ModelInfo
 	for _, pkg := range pkgs {
-		if len(pkg.Errors) > 0 {
-			return nil, fmt.Errorf("codegen: package %s has errors: %v", pkg.PkgPath, pkg.Errors[0])
+		if err := checkPackageErrors(pkg, tolerateGeneratedRefs); err != nil {
+			return nil, err
 		}
 		pkgModels, err := scanPackage(pkg)
 		if err != nil {
@@ -58,6 +83,154 @@ func ScanPackages(patterns []string, dir ...string) ([]ModelInfo, error) {
 		return models[i].Name < models[j].Name
 	})
 	return models, nil
+}
+
+// checkPackageErrors reports the first package error that tolerance does not
+// explain. With tolerateGeneratedRefs, a type error "undefined: X" is accepted
+// when X is a symbol the emitter declares for a model of this package: the
+// generated file that declared it was removed for the scan and is about to be
+// rewritten. The go list error carries the compiler's copy of the same
+// diagnostics, so each of its lines must also name a tolerated position.
+func checkPackageErrors(pkg *packages.Package, tolerateGeneratedRefs bool) error {
+	if len(pkg.Errors) == 0 {
+		return nil
+	}
+	if !tolerateGeneratedRefs || pkg.Types == nil {
+		return fmt.Errorf("codegen: package %s has errors: %v", pkg.PkgPath, pkg.Errors[0])
+	}
+
+	emitted := emittedSymbols(pkg.Types.Scope())
+	tolerated := make(map[string]bool)
+	var firstFatal *packages.Error
+	for i := range pkg.Errors {
+		e := &pkg.Errors[i]
+		if e.Kind == packages.TypeError {
+			if name, ok := undefinedName(e.Msg); ok && emitted[name] {
+				tolerated[errorPositionKey(e.Pos)] = true
+				continue
+			}
+		}
+		if e.Kind == packages.ListError {
+			continue // the compiler's copy of the diagnostics; checked below
+		}
+		if firstFatal == nil {
+			firstFatal = e
+		}
+	}
+	if firstFatal != nil {
+		return fmt.Errorf("codegen: package %s has errors: %v", pkg.PkgPath, *firstFatal)
+	}
+	for i := range pkg.Errors {
+		e := &pkg.Errors[i]
+		if e.Kind != packages.ListError {
+			continue
+		}
+		if line := uncoveredListError(e.Msg, tolerated); line != "" {
+			return fmt.Errorf("codegen: package %s has errors: %s", pkg.PkgPath, line)
+		}
+	}
+	return nil
+}
+
+// emittedSymbols returns every package-level name EmitModelFile declares for a
+// model in the package scope: XMeta, XRepository, TxXRepository and the column
+// set variable (the plural of the model name). Model detection matches
+// scanPackage: a struct whose embedded field is drel.Model[K].
+func emittedSymbols(scope *types.Scope) map[string]bool {
+	names := make(map[string]bool)
+	for _, name := range scope.Names() {
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok {
+			continue
+		}
+		st, ok := tn.Type().Underlying().(*types.Struct)
+		if !ok {
+			continue
+		}
+		if _, ok := findModelEmbed(st); !ok {
+			continue
+		}
+		model := tn.Name()
+		names[model+"Meta"] = true
+		names[model+"Repository"] = true
+		names["Tx"+model+"Repository"] = true
+		names[pluralize(model)] = true
+	}
+	return names
+}
+
+// undefinedName returns the identifier of a go/types "undefined: X" error.
+func undefinedName(msg string) (string, bool) {
+	name, ok := strings.CutPrefix(msg, "undefined: ")
+	if !ok {
+		return "", false
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || strings.ContainsAny(name, " \t") {
+		return "", false
+	}
+	return name, true
+}
+
+// errorPositionKey reduces a "file:line:col" position to "base.go:line:col", so
+// a compiler diagnostic with a relative path can match a go/types position with
+// an absolute one.
+func errorPositionKey(pos string) string {
+	col := strings.LastIndexByte(pos, ':')
+	if col < 0 {
+		return pos
+	}
+	line := strings.LastIndexByte(pos[:col], ':')
+	if line < 0 {
+		return pos
+	}
+	return filepath.Base(pos[:line]) + pos[line:]
+}
+
+// uncoveredListError returns the first compiler diagnostic in a go list error
+// message that is not the compiler's copy of a tolerated type error. The
+// message is the compiler's stderr: a "# package" header, then one
+// "file.go:line:col: message" line per diagnostic, with continuation lines
+// indented under the diagnostic they belong to.
+func uncoveredListError(msg string, tolerated map[string]bool) string {
+	for i, line := range strings.Split(msg, "\n") {
+		if i == 0 && strings.HasPrefix(line, "# ") {
+			continue
+		}
+		if line == "" || line[0] == '\t' || line[0] == ' ' {
+			continue
+		}
+		base, lineNo, col, ok := parseDiagnostic(line)
+		if !ok {
+			return line
+		}
+		if !tolerated[fmt.Sprintf("%s:%d:%d", base, lineNo, col)] {
+			return line
+		}
+	}
+	return ""
+}
+
+// parseDiagnostic parses one compiler diagnostic line,
+// "file.go:line:col: message".
+func parseDiagnostic(line string) (base string, lineNo, col int, ok bool) {
+	i := strings.Index(line, ".go:")
+	if i < 0 {
+		return "", 0, 0, false
+	}
+	parts := strings.SplitN(line[i+len(".go:"):], ":", 3)
+	if len(parts) != 3 {
+		return "", 0, 0, false
+	}
+	lineNo, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return "", 0, 0, false
+	}
+	col, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return "", 0, 0, false
+	}
+	return filepath.Base(line[:i+len(".go")]), lineNo, col, true
 }
 
 func scanPackage(pkg *packages.Package) ([]ModelInfo, error) {

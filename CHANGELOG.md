@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- `drel generate` accepts a model package that uses its own generated code. A
+  module owns its models, so the slice code that uses the repositories lives in
+  the model package and names `XMeta`, `XRepository`, `TxXRepository` and the
+  column set. Generation removes every `*_drel.go` file before it scans, so the
+  scan rejected the package for referencing symbols that the run was about to
+  rewrite. It now accepts exactly those references, on a first generation and
+  on every regeneration, and still fails on every other package error.
+
 ## [0.10.1] - 2026-09-15
 
 ### Fixed

@@ -856,3 +856,112 @@ type Doc struct {
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "generated code failed to compile:\n%s", out)
 }
+
+// TestGenerate_ModelPackageUsesItsOwnGeneratedSymbols pins issue #10. A module
+// owns its models, so the slice code that uses the repositories lives in the
+// model package. That code names the generated symbols (XMeta, the column set,
+// XRepository, TxXRepository) before generation has run, and generation removes
+// the *_drel.go file that declares them before it scans.
+func TestGenerate_ModelPackageUsesItsOwnGeneratedSymbols(t *testing.T) {
+	dir := setupGenerateModule(t, map[string]string{
+		"models/widget.go": `package models
+
+import "github.com/alternayte/drel"
+
+type Widget struct {
+	drel.Model[int]
+	name string ` + "`db:\"name\"`" + `
+}
+`,
+		"models/service.go": `package models
+
+import (
+	"context"
+
+	"github.com/alternayte/drel"
+)
+
+func findWidget(ctx context.Context, id int) (*Widget, error) {
+	return drel.NewTxRepository(drel.MustFromContext(ctx), WidgetMeta).Find(ctx, id)
+}
+
+var _ = Widgets.CreatedAt.Asc()
+var _ WidgetRepository
+var _ TxWidgetRepository
+`,
+		"drel.yaml": `packages:
+  - ./models
+output:
+  db: ./db/drel_gen.go
+`,
+	})
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { os.Chdir(origDir) })
+	require.NoError(t, os.Chdir(dir))
+
+	// First generation: service.go names symbols that do not exist yet.
+	require.NoError(t, Generate("drel.yaml"))
+
+	// A model change must regenerate while service.go still names the old
+	// generated symbols.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "models", "widget.go"), []byte(`package models
+
+import "github.com/alternayte/drel"
+
+type Widget struct {
+	drel.Model[int]
+	title string `+"`db:\"title\"`"+`
+}
+`), 0644))
+	require.NoError(t, Generate("drel.yaml"))
+
+	content, err := os.ReadFile(filepath.Join(dir, "models", "widget_drel.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), `"title"`)
+	assert.NotContains(t, string(content), `"name"`)
+
+	build := exec.Command("go", "build", "./...")
+	build.Dir = dir
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "go build failed: %s", string(out))
+}
+
+// TestGenerate_RejectsUndefinedNonGeneratedName proves the tolerance in
+// TestGenerate_ModelPackageUsesItsOwnGeneratedSymbols is narrow: a hand-written
+// reference to a name generation will not emit still fails the scan.
+func TestGenerate_RejectsUndefinedNonGeneratedName(t *testing.T) {
+	dir := setupGenerateModule(t, map[string]string{
+		"models/widget.go": `package models
+
+import "github.com/alternayte/drel"
+
+type Widget struct {
+	drel.Model[int]
+	name string ` + "`db:\"name\"`" + `
+}
+`,
+		"models/service.go": `package models
+
+func findWidget() {
+	_ = WidgteMeta
+}
+`,
+		"drel.yaml": `packages:
+  - ./models
+output:
+  db: ./db/drel_gen.go
+`,
+	})
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { os.Chdir(origDir) })
+	require.NoError(t, os.Chdir(dir))
+
+	err = Generate("drel.yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "undefined: WidgteMeta")
+	assert.NoFileExists(t, filepath.Join(dir, "models", "widget_drel.go"))
+}

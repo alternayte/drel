@@ -48,8 +48,10 @@ func ResolveModuleRoot(startDir string) string {
 // Stale generated *_drel.go files that would obstruct the package scan
 // (because they reference deleted model types) are removed before scanning, but
 // their contents are saved so they can be restored if any later step fails.
-// After a successful write, truly stale files that no longer back any scanned
-// model are permanently removed.
+// The scan then accepts hand-written references to the generated symbols of the
+// scanned package's own models, because the removal above is what makes them
+// look undefined. After a successful write, truly stale files that no longer
+// back any scanned model are permanently removed.
 func Generate(configPath string) error {
 	return GenerateModule(configPath, "")
 }
@@ -119,7 +121,12 @@ func GenerateModule(configPath, module string) error {
 	// module root on its own from the working directory, so cfgDir is the
 	// correct base -- NOT ResolveModuleRoot(cfgDir), which would resolve
 	// ./models relative to the repo root when the config lives in a subdir.
-	models, err := ScanPackages(cfg.AllPackages(), cfgDir)
+	//
+	// The scan tolerates hand-written references to the generated symbols of
+	// this package's own models. The hand-written file is the natural user of
+	// the repositories when a module owns its models, and the symbol is
+	// missing only because the removal above took the file that declares it.
+	models, err := ScanPackagesForGenerate(cfg.AllPackages(), cfgDir)
 	if err != nil {
 		return err
 	}
