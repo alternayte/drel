@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
-## [Unreleased]
+## [0.10.3] - 2026-10-16
 
 ### Added
 
@@ -727,6 +727,7 @@ Initial release: Postgres (pgx) core, code generation (model scanning, query
 builders, scan/snapshot/diff), basic CRUD, snapshot-based change tracking,
 implicit transactions, and the type-safe query builder.
 
+[0.10.3]: https://github.com/alternayte/drel/releases/tag/v0.10.3
 [0.10.2]: https://github.com/alternayte/drel/releases/tag/v0.10.2
 [0.10.1]: https://github.com/alternayte/drel/releases/tag/v0.10.1
 [0.10.0]: https://github.com/alternayte/drel/releases/tag/v0.10.0
