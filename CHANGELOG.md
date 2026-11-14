@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- `drel migrate new` warns when a `references=` tag names a table that another
+  module declares and has not migrated yet. The merged migration files apply in
+  version order, so without that earlier migration this module's `CREATE TABLE`
+  names a table Postgres cannot find, and the failure appears at apply time in
+  a different module's file. The warning names both modules and says which one
+  to generate first; it stays silent when the owning module's snapshot already
+  holds the table, so a settled project sees no noise. The previous warning
+  walked `rel:` relation targets, which `migrate new` rejects as an unknown
+  model before the warning could run.
+
 ## [0.10.4] - 2026-11-14
 
 ### Fixed
