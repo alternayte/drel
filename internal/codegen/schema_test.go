@@ -252,6 +252,88 @@ func TestGenerateSchema_BelongsToFK(t *testing.T) {
 	assert.Contains(t, sql, `"author_id" integer NOT NULL REFERENCES "users"("id")`)
 }
 
+// GenerateSchema must create a table before any table whose foreign key points
+// at it. Postgres resolves REFERENCES at CREATE time, so a child emitted first
+// fails with `relation "spaces" does not exist`. The case is the one reported
+// in issue 15: one module, one model referencing another with references=.
+func TestGenerateSchema_CreatesReferencedTableFirst(t *testing.T) {
+	models := []ModelInfo{
+		{Name: "Member", PKType: "uuid.UUID", TableName: "space_members", Fields: []FieldInfo{
+			{Name: "spaceID", GoType: "uuid.UUID", ColumnName: "space_id",
+				References: "spaces", RefColumn: "id", OnDelete: "CASCADE"},
+		}},
+		{Name: "Space", PKType: "uuid.UUID", TableName: "spaces"},
+	}
+	sql := GenerateSchema(models, "postgres")
+
+	spacesIdx := strings.Index(sql, `CREATE TABLE "spaces"`)
+	membersIdx := strings.Index(sql, `CREATE TABLE "space_members"`)
+	require.Greater(t, spacesIdx, -1, sql)
+	require.Greater(t, membersIdx, -1, sql)
+	assert.Less(t, spacesIdx, membersIdx,
+		"the table a foreign key points at must be created first:\n%s", sql)
+}
+
+// A belongs_to relation orders the emission the same way references= does, and
+// the ordering follows a chain rather than one level.
+func TestGenerateSchema_CreateOrderFollowsAChain(t *testing.T) {
+	models := []ModelInfo{
+		{Name: "Note", PKType: "int", TableName: "notes", Fields: []FieldInfo{
+			{Name: "taskID", GoType: "int", ColumnName: "task_id"},
+			{Name: "task", GoType: "*Task", RelTag: "belongs_to,fk=task_id",
+				Relation: &RelationFieldInfo{Type: "belongs_to", FK: "task_id", TargetModel: "Task"}},
+		}},
+		{Name: "Task", PKType: "int", TableName: "tasks", Fields: []FieldInfo{
+			{Name: "projectID", GoType: "int", ColumnName: "project_id",
+				References: "projects"},
+		}},
+		{Name: "Project", PKType: "int", TableName: "projects"},
+	}
+	sql := GenerateSchema(models, "postgres")
+
+	projectsIdx := strings.Index(sql, `CREATE TABLE "projects"`)
+	tasksIdx := strings.Index(sql, `CREATE TABLE "tasks"`)
+	notesIdx := strings.Index(sql, `CREATE TABLE "notes"`)
+	require.Greater(t, projectsIdx, -1, sql)
+	require.Greater(t, tasksIdx, -1, sql)
+	require.Greater(t, notesIdx, -1, sql)
+	assert.Less(t, projectsIdx, tasksIdx, sql)
+	assert.Less(t, tasksIdx, notesIdx, sql)
+}
+
+// Two tables with no dependency between them are emitted in name order, so the
+// same models always produce the same migration whichever order the packages
+// were scanned in.
+func TestGenerateSchema_IndependentTablesInNameOrder(t *testing.T) {
+	models := []ModelInfo{
+		{Name: "User", PKType: "int", TableName: "users"},
+		{Name: "Post", PKType: "int", TableName: "posts"},
+	}
+	sql := GenerateSchema(models, "postgres")
+
+	postsIdx := strings.Index(sql, `CREATE TABLE "posts"`)
+	usersIdx := strings.Index(sql, `CREATE TABLE "users"`)
+	require.Greater(t, postsIdx, -1, sql)
+	require.Greater(t, usersIdx, -1, sql)
+	assert.Less(t, postsIdx, usersIdx, sql)
+}
+
+// A references= target that no model declares belongs to another module or to
+// another system. It cannot constrain the order, and it must not stall it.
+func TestGenerateSchema_ReferenceToUnmodelledTable(t *testing.T) {
+	models := []ModelInfo{
+		{Name: "Event", PKType: "int", TableName: "events", Fields: []FieldInfo{
+			{Name: "tenantID", GoType: "int", ColumnName: "tenant_id", References: "tenants"},
+		}},
+		{Name: "Audit", PKType: "int", TableName: "audits"},
+	}
+	sql := GenerateSchema(models, "postgres")
+
+	assert.Contains(t, sql, `CREATE TABLE "events"`)
+	assert.Contains(t, sql, `CREATE TABLE "audits"`)
+	assert.Contains(t, sql, `REFERENCES "tenants"("id")`)
+}
+
 func TestGenerateCreateTable_NoFK_WhenNilMap(t *testing.T) {
 	m := ModelInfo{Name: "Post", PKType: "int", TableName: "posts", Fields: []FieldInfo{
 		{Name: "authorID", GoType: "int", ColumnName: "author_id"},
@@ -262,18 +344,23 @@ func TestGenerateCreateTable_NoFK_WhenNilMap(t *testing.T) {
 	assert.NotContains(t, sql, "REFERENCES")
 }
 
-func TestGenerateDropSchema_ReverseOrder(t *testing.T) {
+// The drop order is the reverse of the create order, so a table that holds a
+// foreign key is dropped before the table it points at, whichever order the
+// models are declared in.
+func TestGenerateDropSchema_DropsReferencingTableFirst(t *testing.T) {
 	models := []ModelInfo{
-		{Name: "User", TableName: "users"},
-		{Name: "Post", TableName: "posts"},
+		{Name: "Member", TableName: "space_members", Fields: []FieldInfo{
+			{Name: "spaceID", GoType: "uuid.UUID", ColumnName: "space_id", References: "spaces"},
+		}},
+		{Name: "Space", TableName: "spaces"},
 	}
-	sql := GenerateDropSchema(models)
+	sql := GenerateDropSchema(models, "postgres")
 
-	postsIdx := strings.Index(sql, `DROP TABLE IF EXISTS "posts"`)
-	usersIdx := strings.Index(sql, `DROP TABLE IF EXISTS "users"`)
-	assert.Greater(t, postsIdx, -1)
-	assert.Greater(t, usersIdx, -1)
-	assert.Less(t, postsIdx, usersIdx)
+	membersIdx := strings.Index(sql, `DROP TABLE IF EXISTS "space_members"`)
+	spacesIdx := strings.Index(sql, `DROP TABLE IF EXISTS "spaces"`)
+	assert.Greater(t, membersIdx, -1, sql)
+	assert.Greater(t, spacesIdx, -1, sql)
+	assert.Less(t, membersIdx, spacesIdx, sql)
 }
 
 func TestGenerateSchema_EnumEscaping(t *testing.T) {

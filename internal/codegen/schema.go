@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -248,6 +249,12 @@ func sameForeignKey(a, b Column) bool {
 // GenerateSchema emits the full schema DDL for a slice of models, including
 // enum type definitions, foreign key constraints, and many-to-many pivot tables.
 // dialect controls SQL type mappings and syntax ("postgres" or "sqlite").
+//
+// Tables are emitted in foreign key dependency order, not in the order the
+// models were scanned: Postgres resolves a REFERENCES target when it runs
+// CREATE TABLE, so the referenced table must exist first. A pivot table
+// references two model tables, and every model table is emitted before the
+// pivots, so the pivots always come last.
 func GenerateSchema(models []ModelInfo, dialect string) string {
 	fks := collectFKs(models)
 	pivots := collectPivotTables(models, dialect)
@@ -264,11 +271,12 @@ func GenerateSchema(models []ModelInfo, dialect string) string {
 		}
 	}
 
-	for i, m := range models {
+	tables := modelTables(models, fks, dialect)
+	for i, t := range createOrder(tables) {
 		if i > 0 || len(enums) > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(GenerateCreateTable(m, fks, dialect))
+		b.WriteString(createTableSQL(t, dialect))
 	}
 	for _, p := range pivots {
 		b.WriteString("\n")
@@ -277,9 +285,8 @@ func GenerateSchema(models []ModelInfo, dialect string) string {
 
 	// Emit CREATE [UNIQUE] INDEX statements for every index in the schema,
 	// after all tables/pivots, in table-then-index order.
-	schema := BuildSchema(models, dialect)
 	var idxBuf strings.Builder
-	for _, t := range schema.Tables {
+	for _, t := range tables {
 		for _, idx := range t.Indexes {
 			idxBuf.WriteString(createIndexSQL(t.Name, idx))
 		}
@@ -290,6 +297,86 @@ func GenerateSchema(models []ModelInfo, dialect string) string {
 	}
 
 	return b.String()
+}
+
+// modelTables builds the logical table of every model, so the DDL and the
+// migration differ read one description of a model.
+func modelTables(models []ModelInfo, fks map[string]string, dialect string) []Table {
+	tables := make([]Table, 0, len(models))
+	for _, m := range models {
+		tables = append(tables, buildTable(m, fks, dialect))
+	}
+	return tables
+}
+
+// createOrder returns tables ordered so that a table follows every table its
+// foreign keys point at. Postgres resolves REFERENCES at CREATE time, so a
+// child emitted before its parent fails with `relation does not exist`.
+//
+// Tables that do not depend on one another follow table name order. The scan
+// order of the packages that declared the models does not reach the migration,
+// so the same models always produce the same SQL.
+//
+// A reference to a table outside the set belongs to another module, or to a
+// table another system owns. No statement here creates it, so it constrains
+// nothing. Inline REFERENCES cannot express a reference cycle in any order, so
+// a cycle leaves the pending tables in name order and the database reports it.
+func createOrder(tables []Table) []Table {
+	// index holds the input position of every table with each name, so a name
+	// that appears twice still emits twice.
+	index := make(map[string][]int, len(tables))
+	for i, t := range tables {
+		index[t.Name] = append(index[t.Name], i)
+	}
+
+	byName := make([]int, len(tables))
+	for i := range byName {
+		byName[i] = i
+	}
+	sort.Slice(byName, func(a, b int) bool {
+		return tables[byName[a]].Name < tables[byName[b]].Name
+	})
+
+	emitted := make([]bool, len(tables))
+	ordered := make([]Table, 0, len(tables))
+	for len(ordered) < len(tables) {
+		progress := false
+		for _, i := range byName {
+			if emitted[i] || referencesPending(tables[i], index, emitted) {
+				continue
+			}
+			emitted[i] = true
+			ordered = append(ordered, tables[i])
+			progress = true
+		}
+		if progress {
+			continue
+		}
+		for _, i := range byName {
+			if !emitted[i] {
+				ordered = append(ordered, tables[i])
+			}
+		}
+		break
+	}
+	return ordered
+}
+
+// referencesPending reports whether t holds a foreign key to a table that has
+// not been emitted yet. A self-reference is not pending: one CREATE TABLE
+// declares the column and the reference together.
+func referencesPending(t Table, index map[string][]int, emitted []bool) bool {
+	for _, c := range t.Columns {
+		if c.Ref == "" || c.Ref == t.Name {
+			continue
+		}
+		for _, i := range index[c.Ref] {
+			if !emitted[i] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // collectPivotTables generates CREATE TABLE DDL for many-to-many join tables.
@@ -341,12 +428,15 @@ func collectPivotTables(models []ModelInfo, dialect string) []string {
 	return pivots
 }
 
-// GenerateDropSchema emits DROP TABLE statements in reverse order to respect
-// foreign key dependencies.
-func GenerateDropSchema(models []ModelInfo) string {
+// GenerateDropSchema emits DROP TABLE statements in the reverse of the order
+// GenerateSchema creates them, so a table is dropped before any table it
+// references.
+func GenerateDropSchema(models []ModelInfo, dialect string) string {
+	ordered := createOrder(modelTables(models, collectFKs(models), dialect))
+
 	var b strings.Builder
-	for i := len(models) - 1; i >= 0; i-- {
-		b.WriteString(fmt.Sprintf("DROP TABLE IF EXISTS %s;\n", quoteIdent(models[i].TableName)))
+	for i := len(ordered) - 1; i >= 0; i-- {
+		b.WriteString(fmt.Sprintf("DROP TABLE IF EXISTS %s;\n", quoteIdent(ordered[i].Name)))
 	}
 	return b.String()
 }
@@ -424,11 +514,18 @@ func DiffSchemas(old, newSchema Schema, dialect string) (upSQL, downSQL string, 
 		}
 	}
 
-	// 2. New tables (preserve new-schema order).
+	// 2. New tables, in foreign key dependency order: a new table that
+	// references another new table needs it first, or Postgres rejects the
+	// CREATE. A reference to a table the old schema already holds constrains
+	// nothing.
+	var created []Table
 	for _, t := range newSchema.Tables {
 		if _, ok := oldTables[t.Name]; ok {
 			continue
 		}
+		created = append(created, t)
+	}
+	for _, t := range createOrder(created) {
 		up = append(up, strings.TrimRight(createTableSQL(t, dialect), "\n"))
 		for _, idx := range t.Indexes {
 			up = append(up, strings.TrimRight(createIndexSQL(t.Name, idx), "\n"))
