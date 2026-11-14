@@ -122,9 +122,7 @@ func BuildSchema(models []ModelInfo, dialect string) Schema {
 		s.Enums = buildEnums(models)
 	}
 
-	for _, m := range models {
-		s.Tables = append(s.Tables, buildTable(m, fks, dialect))
-	}
+	s.Tables = modelTables(models, fks, dialect)
 	for _, t := range buildPivotTables(models, dialect) {
 		s.Tables = append(s.Tables, t)
 	}

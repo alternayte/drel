@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format is based on
 to [Semantic Versioning](https://semver.org/). While the major version is `0`,
 minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- `drel migrate new` emits `CREATE TABLE` in foreign key dependency order, so a
+  table is created before the table that references it. One module whose first
+  migration held a `references=` or a `belongs_to` relation between two models
+  failed on Postgres with `ERROR: relation "spaces" does not exist`, because the
+  model order — the order the packages were scanned in — reached the file
+  unchanged. SQLite accepted the same file, because it does not check a
+  referenced table at `CREATE` time. A migration that adds several tables at
+  once now orders those tables the same way. Tables with no reference between
+  them follow table name order, so the migration no longer depends on scan
+  order.
+
 ## [0.10.3] - 2026-10-16
 
 ### Added
