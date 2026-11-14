@@ -313,11 +313,23 @@ func runMigrateNew(parsed parsedCmd) {
 	fmt.Printf("drel: created migration %s_%s in module %s\n", version, name, target.Name)
 }
 
-// warnCrossModuleRefs reports a relation that points at a table owned by
-// another module. The reference is allowed, and the merged migrations apply in
-// timestamp order, so a person must know that the order matters.
+// warnCrossModuleRefs reports a references= tag that points at a table owned by
+// another module, when that module has not migrated the table yet. The merged
+// migrations apply in timestamp order, so without that earlier migration this
+// module's CREATE TABLE names a table Postgres cannot find.
+//
+// A references= tag is the only way to point at another module: a rel: relation
+// must resolve to a model of the scanned module, and validation rejects one
+// that does not, so a relation target owned by a sibling module never reaches
+// this point.
 func warnCrossModuleRefs(cfg *codegen.Config, target codegen.ModuleConfig, models []codegen.ModelInfo, cfgDir string) {
-	others := make(map[string]string) // model name -> module name
+	own := make(map[string]bool, len(models)) // table names this module creates
+	for _, m := range models {
+		own[m.TableName] = true
+	}
+
+	// Referenced table -> the module that declares it.
+	owners := make(map[string]codegen.ModuleConfig)
 	for _, m := range cfg.ModuleList() {
 		if m.Name == target.Name {
 			continue
@@ -327,38 +339,57 @@ func warnCrossModuleRefs(cfg *codegen.Config, target codegen.ModuleConfig, model
 			continue // a module that does not build cannot be checked here
 		}
 		for _, om := range otherModels {
-			others[om.Name] = m.Name
+			if _, declared := owners[om.TableName]; !declared {
+				owners[om.TableName] = m
+			}
 		}
 	}
-	if len(others) == 0 {
+	if len(owners) == 0 {
 		return
 	}
 
-	own := make(map[string]bool)
-	for _, m := range models {
-		own[m.Name] = true
-	}
-
-	seen := make(map[string]bool)
+	seen := make(map[string]bool, len(models))
 	for _, m := range models {
 		for _, f := range m.Fields {
-			if f.Relation == nil || f.Relation.TargetModel == "" {
+			if f.References == "" || own[f.References] || seen[f.References] {
 				continue
 			}
-			ownerModule, ok := others[f.Relation.TargetModel]
-			if !ok || own[f.Relation.TargetModel] {
-				continue
+			seen[f.References] = true
+
+			owner, declared := owners[f.References]
+			if !declared {
+				continue // a table no module declares belongs to another system
 			}
-			key := f.Relation.TargetModel + "/" + ownerModule
-			if seen[key] {
-				continue
+			if moduleMigratedTable(owner, f.References, cfgDir) {
+				continue // its migration already sorts before the one being written
 			}
-			seen[key] = true
 			fmt.Fprintf(os.Stderr,
-				"drel: warning: module %q references model %q owned by module %q; the merged migrations apply in timestamp order, so generate %q first\n",
-				target.Name, f.Relation.TargetModel, ownerModule, ownerModule)
+				"drel: warning: module %q references table %q owned by module %q, which has not migrated that table; the merged migrations apply in timestamp order, so generate the migration for %q first\n",
+				target.Name, f.References, owner.Name, owner.Name)
 		}
 	}
+}
+
+// moduleMigratedTable reports whether a module's last generated migration
+// already created the table. The snapshot is written by `migrate new` from the
+// module's full schema, so a snapshot that holds the table proves a migration
+// of that module creates it, and every existing file sorts before the one being
+// written now.
+func moduleMigratedTable(m codegen.ModuleConfig, table, cfgDir string) bool {
+	dir := m.Migrations
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(cfgDir, dir)
+	}
+	snapshot, ok, err := codegen.LoadSnapshot(filepath.Join(dir, ".drel_snapshot.json"))
+	if err != nil || !ok {
+		return false
+	}
+	for _, t := range snapshot.Tables {
+		if t.Name == table {
+			return true
+		}
+	}
+	return false
 }
 
 func runMigrateUp(parsed parsedCmd) {
